@@ -40,7 +40,7 @@
     async function loadReminders(){let snap=await getDoc(doc(db,"users",user.uid));reminders=snap.exists()&&Array.isArray(snap.data().reminders)?snap.data().reminders:[];render()}
     $("signInBtn").onclick=async()=>{ $("authError").textContent=""; try{await signInWithPopup(auth,provider)}catch(e){$("authError").textContent=e.code==="auth/popup-closed-by-user"?"Sign-in was cancelled.":"Sign-in could not be completed. Please try again."}}
     $("signOutBtn").onclick=()=>signOut(auth);
-    onAuthStateChanged(auth,async current=>{user=current;if(current){$("loginGate").hidden=true;$("app").hidden=false;$("userEmail").textContent=current.email||current.displayName||"Signed in";try{await loadReminders()}catch(e){setStatus("Could not load your reminders. Check Firestore setup.")}}else{$("loginGate").hidden=false;$("app").hidden=true;reminders=[]}});
+    onAuthStateChanged(auth,async current=>{user=current;if(current){$("loginGate").hidden=true;$("app").hidden=false;$("quickAdd").classList.add("hidden");$("userEmail").textContent=current.email||current.displayName||"Signed in";try{await loadReminders();requestAnimationFrame(()=>$("taskSection").scrollIntoView({behavior:"smooth",block:"start"}))}catch(e){setStatus("Could not load your reminders. Check Firestore setup.")}}else{$("loginGate").hidden=false;$("app").hidden=true;reminders=[]}});
     $("repeat").addEventListener("change",()=>{let show=$("repeat").value!=="once";$("amountWrap").style.display=show?"flex":"none";$("unitWrap").style.display=show?"flex":"none";$("unitText").textContent=label[$("repeat").value]||""});
     $("filter").addEventListener("change",render);
     $("clearBtn").addEventListener("click",async()=>{reminders=reminders.filter(r=>!r.done);await save();render()});
