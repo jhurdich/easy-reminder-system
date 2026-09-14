@@ -2,22 +2,46 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isOwner(string userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
     match /users/{userId} {
-      function isOwner() {
-        return request.auth != null && request.auth.uid == userId;
-      }
+      // Legacy document is readable/deletable only by its owner for one-time migration.
+      allow read, delete: if isOwner(userId);
+      allow create, update: if false;
 
-      function isValidUserDocument() {
-        return request.resource.data.keys().hasOnly(['reminders', 'updatedAt'])
-          && request.resource.data.keys().hasAll(['reminders', 'updatedAt'])
-          && request.resource.data.reminders is list
-          && request.resource.data.reminders.size() <= 500
-          && request.resource.data.updatedAt == request.time;
-      }
+      match /reminders/{reminderId} {
+        function isValidReminder() {
+          return request.resource.data.keys().hasOnly([
+              'id', 'title', 'note', 'labels', 'repeat', 'amount',
+              'priority', 'next', 'done'
+            ])
+            && request.resource.data.keys().hasAll([
+              'id', 'title', 'note', 'labels', 'repeat', 'amount',
+              'priority', 'next', 'done'
+            ])
+            && request.resource.data.id == reminderId
+            && request.resource.data.title is string
+            && request.resource.data.title.size() <= 200
+            && request.resource.data.note is string
+            && request.resource.data.note.size() <= 2000
+            && request.resource.data.labels is list
+            && request.resource.data.labels.size() <= 20
+            && request.resource.data.repeat in ['once', 'minutes', 'hours', 'days', 'weeks']
+            && request.resource.data.amount is int
+            && request.resource.data.amount >= 0
+            && request.resource.data.amount <= 100000
+            && request.resource.data.priority in ['low', 'medium', 'high']
+            && request.resource.data.next is string
+            && request.resource.data.next.size() <= 40
+            && request.resource.data.done is bool;
+        }
 
-      allow read: if isOwner();
-      allow create, update: if isOwner() && isValidUserDocument();
-      allow delete: if isOwner();
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidReminder();
+        allow delete: if isOwner(userId);
+      }
     }
   }
 }
