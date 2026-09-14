@@ -1,5 +1,5 @@
 import{initializeApp}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";import{initializeAppCheck,ReCaptchaEnterpriseProvider}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";import{getAuth,GoogleAuthProvider,FacebookAuthProvider,onAuthStateChanged,signInWithPopup,signOut}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";import{getFirestore,collection,doc,getDoc,getDocs,setDoc,deleteDoc,serverTimestamp}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
-const c={apiKey:"AIzaSyCe3qaOFx6ey5LAghth8l2cQ9VonSY7hnQ",authDomain:"easy-reminder-system.firebaseapp.com",projectId:"easy-reminder-system",storageBucket:"easy-reminder-system.firebasestorage.app",messagingSenderId:"502381230653",appId:"1:502381230653:web:8a0162b42b25d5356e4854"};const a=initializeApp(c);let appCheck=null;try{appCheck=initializeAppCheck(a,{provider:new ReCaptchaEnterpriseProvider("6LfccbstAAAAAACjUCUaBSbXPPAD0-un914Et1O6"),isTokenAutoRefreshEnabled:true})}catch(e){console.error("Firebase App Check initialization failed:",e)}const auth=getAuth(a),db=getFirestore(a),provider=new GoogleAuthProvider(),fbProvider=new FacebookAuthProvider(),$=i=>document.getElementById(i);let user=null,reminders=[],view="inbox",query="",labelFilter="",idleTimer=null,loginInProgress=false;const IDLE_LIMIT=60000,now=new Date(),units={once:"one time",minutes:"minute(s)",hours:"hour(s)",days:"day(s)",weeks:"week(s)"};$("date").value=now.toISOString().slice(0,10);$("time").value="09:00";
+const c={apiKey:"AIzaSyCe3qaOFx6ey5LAghth8l2cQ9VonSY7hnQ",authDomain:"easy-reminder-system.firebaseapp.com",projectId:"easy-reminder-system",storageBucket:"easy-reminder-system.firebasestorage.app",messagingSenderId:"502381230653",appId:"1:502381230653:web:8a0162b42b25d5356e4854"};const a=initializeApp(c);let appCheck=null;try{appCheck=initializeAppCheck(a,{provider:new ReCaptchaEnterpriseProvider("6LfccbstAAAAAACjUCUaBSbXPPAD0-un914Et1O6"),isTokenAutoRefreshEnabled:true})}catch(e){console.error("Firebase App Check initialization failed:",e)}const auth=getAuth(a),db=getFirestore(a),provider=new GoogleAuthProvider(),fbProvider=new FacebookAuthProvider(),$=i=>document.getElementById(i);let user=null,reminders=[],view="inbox",query="",labelFilter="",idleTimer=null,activeLoginAttempt=null;const IDLE_LIMIT=60000,now=new Date(),units={once:"one time",minutes:"minute(s)",hours:"hour(s)",days:"day(s)",weeks:"week(s)"};$("date").value=now.toISOString().slice(0,10);$("time").value="09:00";
 function resetIdleTimer(){if(idleTimer)clearTimeout(idleTimer);if(!user)return;idleTimer=setTimeout(async()=>{await signOut(auth);$("authError").textContent="You were signed out after 1 minute of inactivity.";},IDLE_LIMIT)}["click","keydown","mousemove","touchstart","scroll"].forEach(type=>window.addEventListener(type,resetIdleTimer,{passive:true}));function esc(s){return String(s).replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[x]))}function key(d){let x=new Date(d);return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}function reminderRef(id){return doc(db,"users",user.uid,"reminders",id)}function saveReminder(r){return user?setDoc(reminderRef(r.id),r):Promise.resolve()}function deleteReminder(id){return user?deleteDoc(reminderRef(id)):Promise.resolve()}function status(t){$("status").textContent=t;setTimeout(()=>$("status").textContent="",3500)}function cal(r){let s=new Date(r.next),e=new Date(s.getTime()+3600000),f=d=>d.toISOString().replace(/[-:]/g,"").replace(/.d{3}Z$/,"Z");return"https://calendar.google.com/calendar/render?action=TEMPLATE&text="+encodeURIComponent(r.title)+"&dates="+f(s)+"/"+f(e)+"&details="+encodeURIComponent((r.repeat==="once"?"":"Repeats every "+r.amount+" "+units[r.repeat]+"."))}
 function filtered(){let q=query.toLowerCase().trim(),today=key(new Date());return reminders.filter(r=>{let text=(r.title+" "+(r.note||"")+" "+(r.labels||[]).join(" ")).toLowerCase(),d=key(r.next),match=!q||text.includes(q),lab=!labelFilter||(r.labels||[]).includes(labelFilter),v=view==="inbox"?!r.done:view==="today"?!r.done&&d===today:view==="upcoming"?!r.done&&d>today:view==="filters"?!r.done&&lab:true;return match&&v}).sort((x,y)=>new Date(x.next)-new Date(y.next))}
 function render(){
@@ -41,24 +41,38 @@ function authMessage(providerName, error) {
 }
 
 async function loginWithPopup(buttonId, providerName, oauthProvider) {
-  if (loginInProgress) return;
-  loginInProgress = true;
-  loginButtons.forEach(({ element }) => { element.disabled = true; });
+  if (activeLoginAttempt?.buttonId === buttonId) return;
+  const attempt = { buttonId };
+  activeLoginAttempt = attempt;
+  loginButtons.forEach(({ element, label }) => {
+    element.disabled = element === $(buttonId);
+    element.innerHTML = label;
+  });
   $(buttonId).textContent = "Opening " + providerName + "...";
   $("authError").textContent = "";
+  $("loginHint").textContent = "Changed your mind? Choose the other sign-in button to switch.";
+  $("loginHint").classList.remove("hidden");
 
   try {
     // Do not await other work here: the popup needs the original click gesture.
+    // Firebase cancels its previous popup when another provider is selected.
     await signInWithPopup(auth, oauthProvider);
   } catch (error) {
     // Firebase detects real popup closure. Window focus alone is not cancellation.
-    $("authError").textContent = authMessage(providerName, error);
+    if (activeLoginAttempt === attempt) {
+      $("authError").textContent = authMessage(providerName, error);
+    }
   } finally {
-    loginInProgress = false;
-    loginButtons.forEach(({ element, label }) => {
-      element.disabled = false;
-      element.innerHTML = label;
-    });
+    // An older popup can settle after a switch; only the latest owns the UI.
+    if (activeLoginAttempt === attempt) {
+      activeLoginAttempt = null;
+      $("loginHint").textContent = "";
+      $("loginHint").classList.add("hidden");
+      loginButtons.forEach(({ element, label }) => {
+        element.disabled = false;
+        element.innerHTML = label;
+      });
+    }
   }
 }
 

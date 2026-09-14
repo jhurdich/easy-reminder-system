@@ -10,7 +10,7 @@ const html = readFileSync(path.join(root, 'reminder-system.html'), 'utf8');
 
 // Execute the entire production ES module with isolated Firebase/DOM doubles.
 // No network requests, real credentials, or production reminder data are used.
-async function startApp() {
+async function startApp({ deferCancellation = false } = {}) {
   const events = new Map();
   const timers = new Map();
   let timerId = 0;
@@ -35,7 +35,8 @@ async function startApp() {
     assert.ok(label, 'The login button exists in the production HTML: ' + id);
     elements.get(id).innerHTML = label[1];
   }
-  const calls = { order: [], popups: [], signouts: 0, redirects: 0, navigations: [], reads: [] };
+  const calls = { order: [], popups: [], cancelledPopups: [], signouts: 0, redirects: 0, navigations: [], reads: [] };
+  const deferredCancellations = [];
   let authListener;
   let pendingPopup;
   const auth = { currentUser: null };
@@ -53,8 +54,22 @@ async function startApp() {
     onAuthStateChanged(instance, callback) { assert.equal(instance, auth); authListener = callback; },
     signInWithPopup(instance, provider) {
       assert.equal(instance, auth);
+      // Firebase's PopupOperation cancels the previous operation on replacement.
+      // Deferring its rejection exercises stale completion after the new request.
+      if (pendingPopup && !pendingPopup.settled) {
+        const previous = pendingPopup;
+        calls.cancelledPopups.push(previous.provider);
+        const cancel = () => previous.reject({ code: 'auth/cancelled-popup-request' });
+        if (deferCancellation) deferredCancellations.push(cancel); else cancel();
+      }
       calls.popups.push(provider.providerId);
-      return new Promise((resolve, reject) => { pendingPopup = { resolve, reject }; });
+      return new Promise((resolve, reject) => {
+        pendingPopup = {
+          provider: provider.providerId, settled: false,
+          resolve(value) { this.settled = true; resolve(value); },
+          reject(error) { this.settled = true; reject(error); }
+        };
+      });
     },
     async signInWithRedirect() { calls.redirects++; },
     async signOut() { calls.signouts++; auth.currentUser = null; await authListener(null); },
@@ -102,6 +117,7 @@ async function startApp() {
   await authListener(null);
   return {
     elements, calls,
+    finishCancellations() { deferredCancellations.splice(0).forEach(cancel => cancel()); },
     click: id => elements.get(id).onclick(),
     dispatch(type) {
       const listeners = events.get(type) || [];
@@ -152,9 +168,11 @@ for (const [id, provider, name, otherId] of [
     const labels = [id, otherId].map(key => app.elements.get(key).innerHTML);
     const attempt = app.click(id);
     assert.deepEqual(app.calls.popups, [provider], 'The SDK is called before yielding the click gesture');
-    for (const key of [id, otherId]) assert.equal(app.elements.get(key).disabled, true);
-    await app.click(otherId);
-    assert.equal(app.calls.popups.length, 1, 'A second provider cannot cancel the pending popup');
+    assert.equal(app.elements.get(id).disabled, true);
+    assert.equal(app.elements.get(otherId).disabled, false, 'The other provider stays available');
+    assert.equal(app.elements.get('loginHint').classList.contains('hidden'), false);
+    await app.click(id);
+    assert.equal(app.calls.popups.length, 1, 'Duplicate clicks on the current provider are ignored');
     app.dispatch('focus');
     await app.advance(1000);
     assert.equal(app.elements.get('authError').textContent, '');
@@ -171,6 +189,68 @@ for (const [id, provider, name, otherId] of [
     }
     assertNoNavigationOrSignout(app);
   });
+
+  test(name + ': switching immediately resets the old button and keeps the new attempt pending', async () => {
+    const app = await startApp();
+    const oldLabel = app.elements.get(id).innerHTML;
+    const first = app.click(id);
+    const second = app.click(otherId);
+    const otherProvider = provider === 'google.com' ? 'facebook.com' : 'google.com';
+    assert.deepEqual(app.calls.popups, [provider, otherProvider], 'Switch starts within the second click');
+    assert.deepEqual(app.calls.cancelledPopups, [provider]);
+    assert.equal(app.elements.get(id).disabled, false);
+    assert.equal(app.elements.get(id).innerHTML, oldLabel);
+    assert.equal(app.elements.get(otherId).disabled, true);
+    await first;
+    assert.equal(app.elements.get('authError').textContent, '', 'Replacement cancellation is not an error for the new attempt');
+    assert.equal(app.elements.get(otherId).disabled, true, 'Old cleanup cannot reset the new attempt');
+    app.dispatch('focus');
+    await app.advance(1000);
+    assert.equal(app.elements.get(otherId).disabled, true);
+    await app.succeed();
+    await second;
+    assert.equal(app.elements.get('app').classList.contains('hidden'), false);
+    assert.equal(app.elements.get('loginHint').classList.contains('hidden'), true);
+    for (const key of [id, otherId]) assert.equal(app.elements.get(key).disabled, false);
+    assertNoNavigationOrSignout(app);
+  });
+
+  test(name + ': rapid switching back ignores cleanup from the earlier attempt at the same provider', async () => {
+    const app = await startApp();
+    const first = app.click(id);
+    const second = app.click(otherId);
+    const third = app.click(id);
+    await Promise.all([first, second]);
+    assert.equal(app.calls.popups.length, 3);
+    assert.equal(app.elements.get(id).disabled, true);
+    assert.equal(app.elements.get(id).textContent, 'Opening ' + name + '...');
+    assert.equal(app.elements.get(otherId).disabled, false);
+    assert.equal(app.elements.get('authError').textContent, '');
+    await app.succeed();
+    await third;
+    assert.equal(app.elements.get('loginHint').classList.contains('hidden'), true);
+    assertNoNavigationOrSignout(app);
+  });
+
+  for (const newestSucceeds of [true, false]) {
+    test(name + ': delayed cancellation cannot overwrite the new ' + (newestSucceeds ? 'success' : 'error'), async () => {
+      const app = await startApp({ deferCancellation: true });
+      const first = app.click(id);
+      const second = app.click(otherId);
+      if (newestSucceeds) await app.succeed();
+      else app.fail('auth/popup-blocked');
+      await second;
+      const latestMessage = app.elements.get('authError').textContent;
+      if (newestSucceeds) assert.equal(latestMessage, '');
+      else assert.match(latestMessage, /auth\/popup-blocked/);
+      app.finishCancellations();
+      await first;
+      assert.equal(app.elements.get('authError').textContent, latestMessage);
+      assert.equal(app.elements.get('loginHint').classList.contains('hidden'), true);
+      for (const key of [id, otherId]) assert.equal(app.elements.get(key).disabled, false);
+      assertNoNavigationOrSignout(app);
+    });
+  }
 
   for (const code of ['auth/popup-closed-by-user', 'auth/popup-blocked', 'auth/internal-error', 'auth/operation-not-supported-in-this-environment']) {
     test(name + ': ' + code + ' displays a retryable error without navigation', async () => {
