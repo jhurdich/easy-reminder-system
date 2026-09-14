@@ -4,7 +4,8 @@ Run from the repository root with Node.js 24. No package installation is require
 
 ```sh
 node --input-type=module --check < reminder-system.js
-node --experimental-vm-modules --test tests/auth.test.cjs
+node --input-type=module --check < account-linking.js
+node --experimental-vm-modules --test tests/*.test.cjs
 ```
 
 These checks execute the entire production JavaScript as an ES module with Firebase
@@ -39,3 +40,21 @@ The Firebase double models the previous-popup cancellation in Firebase's
 [PopupOperation](https://github.com/firebase/firebase-js-sdk/blob/main/packages/auth/src/platform_browser/strategies/popup.ts).
 Some tests deliberately delay that cancellation to verify that stale results cannot
 reset the latest attempt's UI. Real provider switching still needs the browser check above.
+
+Account-linking checks cover required reauthentication, same-UID linking, both provider
+directions, expired verification, existing-account conflicts, duplicate clicks, and stale
+results after sign-out/account changes. No database or account-deletion APIs are exposed
+to these tests. Normal login tests also assert that no implicit account linking occurs.
+
+Hosting checks cover route-specific headers (excluding Firebase's reserved OAuth helper
+paths) and public-asset allowlist staging with synthetic fixtures. These do not test a
+deployed CDN or real browser headers. None of these tests validate published Firestore
+rules, App Check enforcement, API restrictions, backups, or real OAuth account linking.
+
+Before enabling the new feature for users, use disposable provider accounts in a staging
+project: sign in, verify the current account, link the second provider, record the UID,
+then sign out and sign in with each provider. Confirm the same UID and test reminder are
+returned. Test a credential belonging to another existing account: it must stop without
+merging or deleting either account. Do not use the missing-task accounts for this test.
+
+See [the deployment checklist](../docs/SECURITY-ROLLOUT.md) for the production gates.
