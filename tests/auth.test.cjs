@@ -10,15 +10,16 @@ const html = readFileSync(path.join(root, 'reminder-system.html'), 'utf8');
 
 // Execute the entire production ES module with isolated Firebase/DOM doubles.
 // No network requests, real credentials, or production reminder data are used.
-async function startApp({ deferCancellation = false } = {}) {
+async function startApp({ deferCancellation = false, reminderDocs = [], allowReminderWrites = false } = {}) {
   const events = new Map();
+  const documentEvents = new Map();
   const timers = new Map();
   let timerId = 0;
   let clock = 0;
   const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => {
     const classes = new Set();
     return [id, {
-      disabled: false, innerHTML: '', textContent: '', value: '', style: {},
+      disabled: false, checked: false, dataset: {}, innerHTML: '', textContent: '', value: '', style: {},
       classList: {
         add: value => classes.add(value), remove: value => classes.delete(value),
         contains: value => classes.has(value),
@@ -35,7 +36,7 @@ async function startApp({ deferCancellation = false } = {}) {
     assert.ok(label, 'The login button exists in the production HTML: ' + id);
     elements.get(id).innerHTML = label[1];
   }
-  const calls = { order: [], popups: [], cancelledPopups: [], signouts: 0, redirects: 0, navigations: [], reads: [] };
+  const calls = { order: [], popups: [], cancelledPopups: [], signouts: 0, redirects: 0, navigations: [], reads: [], writes: [] };
   const deferredCancellations = [];
   let authListener;
   let pendingPopup;
@@ -76,15 +77,18 @@ async function startApp({ deferCancellation = false } = {}) {
     getFirestore: () => ({}),
     collection: (db, ...segments) => segments,
     doc: (db, ...segments) => segments,
-    async getDocs(ref) { calls.reads.push(ref); return { docs: [] }; },
+    async getDocs(ref) { calls.reads.push(ref); return { docs: reminderDocs.map(value => ({ data: () => ({ ...value }) })) }; },
     async getDoc() { return { exists: () => false }; },
-    async setDoc() { assert.fail('Signing in should not write a reminder'); },
+    async setDoc(ref, value) { if (!allowReminderWrites) assert.fail('Signing in should not write a reminder'); calls.writes.push({ ref, value }); },
     async deleteDoc() { assert.fail('Signing in should not delete a reminder'); },
     serverTimestamp: () => ({})
   };
   const context = vm.createContext({
     console,
-    document: { getElementById: id => elements.get(id), querySelectorAll: () => [], addEventListener() {} },
+    document: {
+      getElementById: id => elements.get(id), querySelectorAll: () => [],
+      addEventListener(type, callback) { documentEvents.set(type, callback); }
+    },
     window: {
       addEventListener(type, callback, options = {}) {
         const listeners = events.get(type) || [];
@@ -119,6 +123,7 @@ async function startApp({ deferCancellation = false } = {}) {
     elements, calls,
     finishCancellations() { deferredCancellations.splice(0).forEach(cancel => cancel()); },
     click: id => elements.get(id).onclick(),
+    documentClick(dataset, extra = {}) { return documentEvents.get('click')({ target: { dataset, checked: false, ...extra } }); },
     dispatch(type) {
       const listeners = events.get(type) || [];
       events.set(type, listeners.filter(listener => !listener.once));
@@ -138,6 +143,7 @@ async function startApp({ deferCancellation = false } = {}) {
       await authListener(auth.currentUser);
       pendingPopup.resolve({ user: auth.currentUser });
     },
+    submit() { return elements.get('form').onsubmit({ preventDefault() {}, target: elements.get('form') }); },
     fail(code, message = 'Provider error') { pendingPopup.reject({ code, message }); }
   };
 }
@@ -349,4 +355,61 @@ test('Stay signed in closes the warning and starts a new one-minute idle period'
   await app.advance(1);
   assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), false);
   assert.equal(app.calls.signouts, 0);
+});
+
+
+test('Edit loads an existing task and saves changes to the same Firestore document', async () => {
+  const original = {
+    id: 'task-1', title: 'Original task', note: 'Old note', labels: ['work'],
+    repeat: 'days', amount: 2, priority: 'high',
+    next: '2026-09-20T14:30:00.000Z', done: false
+  };
+  const app = await startApp({ reminderDocs: [original], allowReminderWrites: true });
+  app.click('signInBtn');
+  await app.succeed();
+
+  await app.documentClick({ edit: original.id });
+  assert.equal(app.elements.get('formTitle').textContent, 'Edit task');
+  assert.equal(app.elements.get('saveTaskBtn').textContent, 'Save changes');
+  assert.equal(app.elements.get('title').value, original.title);
+  assert.equal(app.elements.get('note').value, original.note);
+  assert.equal(app.elements.get('repeat').value, original.repeat);
+  assert.equal(app.elements.get('amount').value, original.amount);
+  assert.equal(app.elements.get('priority').value, original.priority);
+
+  app.elements.get('title').value = 'Updated task';
+  app.elements.get('note').value = 'Updated note';
+  app.elements.get('labels').value = 'Work, Important';
+  await app.submit();
+
+  assert.equal(app.calls.writes.length, 1);
+  assert.deepEqual(app.calls.writes[0].ref, ['users', 'test-user', 'reminders', original.id]);
+  assert.equal(app.calls.writes[0].value.id, original.id);
+  assert.equal(app.calls.writes[0].value.title, 'Updated task');
+  assert.equal(app.calls.writes[0].value.note, 'Updated note');
+  assert.deepEqual(Array.from(app.calls.writes[0].value.labels), ['work', 'important']);
+  assert.equal(app.calls.writes[0].value.done, false);
+  assert.equal(app.elements.get('status').textContent, 'Task updated.');
+  assert.match(app.elements.get('list').innerHTML, /Updated task/);
+  assert.doesNotMatch(app.elements.get('list').innerHTML, /Original task/);
+});
+
+test('Cancel closes task editing without writing changes', async () => {
+  const original = {
+    id: 'task-2', title: 'Keep this task', note: '', labels: [],
+    repeat: 'once', amount: 0, priority: 'medium',
+    next: '2026-09-21T09:00:00.000Z', done: false
+  };
+  const app = await startApp({ reminderDocs: [original], allowReminderWrites: true });
+  app.click('signInBtn');
+  await app.succeed();
+
+  await app.documentClick({ edit: original.id });
+  app.elements.get('title').value = 'Do not save this';
+  await app.click('cancelAdd');
+
+  assert.equal(app.calls.writes.length, 0);
+  assert.equal(app.elements.get('quickAdd').classList.contains('hidden'), true);
+  assert.equal(app.elements.get('formTitle').textContent, 'Add a task');
+  assert.match(app.elements.get('list').innerHTML, /Keep this task/);
 });
