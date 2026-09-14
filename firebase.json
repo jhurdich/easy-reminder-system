@@ -1,0 +1,48 @@
+{
+  "hosting": {
+    "public": ".firebase-hosting-public",
+    "predeploy": [
+      "node scripts/build-hosting.cjs"
+    ],
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "regex": "^/(index\\.html|reminder-system\\.html|privacy-policy\\.html|data-deletion\\.html|reminder-system\\.js|account-linking\\.js|favicon\\.png)?$",
+        "headers": [
+          {
+            "key": "Content-Security-Policy",
+            "value": "default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' https://www.gstatic.com https://apis.google.com https://www.google.com/recaptcha/; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://recaptchaenterprise.googleapis.com https://www.google.com; frame-src https://*.firebaseapp.com https://accounts.google.com https://www.facebook.com https://www.google.com https://recaptcha.google.com/recaptcha/; img-src 'self' data: https://*.googleusercontent.com; style-src 'self' 'unsafe-inline'; form-action 'self'; upgrade-insecure-requests; frame-ancestors 'none'"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "key": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+          },
+          {
+            "key": "Strict-Transport-Security",
+            "value": "max-age=31536000"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      }
+    ]
+  }
+}

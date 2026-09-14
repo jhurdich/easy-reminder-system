@@ -37,7 +37,8 @@ async function startApp({ deferCancellation = false } = {}) {
   }
   const calls = { order: [], popups: [], cancelledPopups: [], signouts: 0, redirects: 0, navigations: [], reads: [] };
   const deferredCancellations = [];
-  let authListener;
+  const authListeners = [];
+  async function notifyAuth(user) { for (const callback of authListeners) await callback(user); }
   let pendingPopup;
   const auth = { currentUser: null };
   class GoogleAuthProvider { providerId = 'google.com'; }
@@ -51,7 +52,9 @@ async function startApp({ deferCancellation = false } = {}) {
     ReCaptchaEnterpriseProvider,
     getAuth() { calls.order.push('auth'); return auth; },
     GoogleAuthProvider, FacebookAuthProvider,
-    onAuthStateChanged(instance, callback) { assert.equal(instance, auth); authListener = callback; },
+    onAuthStateChanged(instance, callback) { assert.equal(instance, auth); authListeners.push(callback); },
+    async reauthenticateWithPopup() { assert.fail('Normal sign-in must not reauthenticate for linking'); },
+    async linkWithPopup() { assert.fail('Normal sign-in must not implicitly link accounts'); },
     signInWithPopup(instance, provider) {
       assert.equal(instance, auth);
       // Firebase's PopupOperation cancels the previous operation on replacement.
@@ -72,7 +75,7 @@ async function startApp({ deferCancellation = false } = {}) {
       });
     },
     async signInWithRedirect() { calls.redirects++; },
-    async signOut() { calls.signouts++; auth.currentUser = null; await authListener(null); },
+    async signOut() { calls.signouts++; auth.currentUser = null; await notifyAuth(null); },
     getFirestore: () => ({}),
     collection: (db, ...segments) => segments,
     doc: (db, ...segments) => segments,
@@ -106,6 +109,9 @@ async function startApp({ deferCancellation = false } = {}) {
   // A browser module rejects duplicate declarations; new Function(source) does not.
   const module = new vm.SourceTextModule(source, { context });
   await module.link(specifier => {
+    if (specifier === './account-linking.js') {
+      return new vm.SourceTextModule(readFileSync(path.join(root, 'account-linking.js'), 'utf8'), { context });
+    }
     assert.match(specifier, /^https:\/\/www\.gstatic\.com\/firebasejs\/[\d.]+\/firebase-[a-z-]+\.js$/);
     const names = Object.keys(firebase);
     return new vm.SyntheticModule(names, function () {
@@ -113,8 +119,8 @@ async function startApp({ deferCancellation = false } = {}) {
     }, { context });
   });
   await module.evaluate();
-  assert.equal(typeof authListener, 'function', 'Auth state listener is installed');
-  await authListener(null);
+  assert.equal(authListeners.length, 2, 'App and account-linking listeners are installed');
+  await notifyAuth(null);
   return {
     elements, calls,
     finishCancellations() { deferredCancellations.splice(0).forEach(cancel => cancel()); },
@@ -135,7 +141,7 @@ async function startApp({ deferCancellation = false } = {}) {
     },
     async succeed() {
       auth.currentUser = { uid: 'test-user', email: 'test@example.invalid' };
-      await authListener(auth.currentUser);
+      await notifyAuth(auth.currentUser);
       pendingPopup.resolve({ user: auth.currentUser });
     },
     fail(code, message = 'Provider error') { pendingPopup.reject({ code, message }); }
