@@ -305,3 +305,48 @@ test('CSP admits reCAPTCHA frames and retains the other security directives', ()
   assert.deepEqual(directives.get('form-action'), ["'self'"]);
   assert.ok(directives.has('upgrade-insecure-requests'));
 });
+
+
+test('one minute of inactivity shows a warning and 30 more seconds signs the user out', async () => {
+  const app = await startApp();
+  app.click('signInBtn');
+  await app.succeed();
+
+  await app.advance(59_999);
+  assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), true);
+  assert.equal(app.calls.signouts, 0);
+
+  await app.advance(1);
+  assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), false);
+  assert.equal(app.calls.signouts, 0);
+
+  app.dispatch('mousemove');
+  await app.advance(29_999);
+  assert.equal(app.calls.signouts, 0);
+
+  await app.advance(1);
+  assert.equal(app.calls.signouts, 1);
+  assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), true);
+  assert.match(app.elements.get('authError').textContent, /1 minute and 30 seconds/);
+});
+
+test('Stay signed in closes the warning and starts a new one-minute idle period', async () => {
+  const app = await startApp();
+  app.click('signInBtn');
+  await app.succeed();
+
+  await app.advance(60_000);
+  assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), false);
+
+  await app.click('idleStayBtn');
+  assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), true);
+
+  await app.advance(30_000);
+  assert.equal(app.calls.signouts, 0);
+  await app.advance(29_999);
+  assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), true);
+
+  await app.advance(1);
+  assert.equal(app.elements.get('idleWarning').classList.contains('hidden'), false);
+  assert.equal(app.calls.signouts, 0);
+});
