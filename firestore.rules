@@ -15,11 +15,11 @@ service cloud.firestore {
         function isValidReminder() {
           return request.resource.data.keys().hasOnly([
               'id', 'title', 'note', 'labels', 'repeat', 'amount',
-              'priority', 'next', 'done'
+              'priority', 'next', 'startTime', 'endTime', 'done'
             ])
             && request.resource.data.keys().hasAll([
               'id', 'title', 'note', 'labels', 'repeat', 'amount',
-              'priority', 'next', 'done'
+              'priority', 'next', 'startTime', 'endTime', 'done'
             ])
             && request.resource.data.id == reminderId
             && request.resource.data.title is string
@@ -35,6 +35,10 @@ service cloud.firestore {
             && request.resource.data.priority in ['low', 'medium', 'high']
             && request.resource.data.next is string
             && request.resource.data.next.size() <= 40
+            && request.resource.data.startTime is string
+            && request.resource.data.startTime.size() == 5
+            && request.resource.data.endTime is string
+            && request.resource.data.endTime.size() == 5
             && request.resource.data.done is bool;
         }
 
