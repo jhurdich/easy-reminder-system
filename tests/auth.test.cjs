@@ -77,7 +77,15 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     getFirestore: () => ({}),
     collection: (db, ...segments) => segments,
     doc: (db, ...segments) => segments,
-    async getDocs(ref) { calls.reads.push(ref); return { docs: reminderDocs.map(value => ({ data: () => ({ ...value }) })) }; },
+    async getDocs(ref) {
+      calls.reads.push(ref);
+      return {
+        docs: reminderDocs.map(entry => {
+          const value = entry.data || entry;
+          return { id: entry.documentId || value.id, data: () => ({ ...value }) };
+        })
+      };
+    },
     async getDoc() { return { exists: () => false }; },
     async setDoc(ref, value) { if (!allowReminderWrites) assert.fail('Signing in should not write a reminder'); calls.writes.push({ ref, value }); },
     async deleteDoc() { assert.fail('Signing in should not delete a reminder'); },
@@ -412,4 +420,29 @@ test('Cancel closes task editing without writing changes', async () => {
   assert.equal(app.elements.get('quickAdd').classList.contains('hidden'), true);
   assert.equal(app.elements.get('formTitle').textContent, 'Add a task');
   assert.match(app.elements.get('list').innerHTML, /Keep this task/);
+});
+
+test('Edit uses the Firestore document ID when an older stored id field is stale', async () => {
+  const app = await startApp({
+    reminderDocs: [{
+      documentId: 'firestore-task-3',
+      data: {
+        id: 'stale-task-id', title: 'Migrated task', note: '', labels: [],
+        repeat: 'once', amount: 0, priority: 'medium',
+        next: '2026-09-22T09:00:00.000Z', done: false
+      }
+    }],
+    allowReminderWrites: true
+  });
+  app.click('signInBtn');
+  await app.succeed();
+
+  await app.documentClick({ edit: 'firestore-task-3' });
+  app.elements.get('title').value = 'Migrated task updated';
+  await app.submit();
+
+  assert.equal(app.calls.writes.length, 1);
+  assert.deepEqual(app.calls.writes[0].ref, ['users', 'test-user', 'reminders', 'firestore-task-3']);
+  assert.equal(app.calls.writes[0].value.id, 'firestore-task-3');
+  assert.equal(app.calls.writes[0].value.title, 'Migrated task updated');
 });
