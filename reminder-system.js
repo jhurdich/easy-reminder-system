@@ -4,16 +4,18 @@ const TaskCore=globalThis.TaskCore,TaskOptions=globalThis.TaskOptions;
 import{initializeApp}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import{initializeAppCheck,ReCaptchaEnterpriseProvider}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";
 import{getAuth,GoogleAuthProvider,FacebookAuthProvider,onAuthStateChanged,signInWithPopup,signOut}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
-import{getFirestore,collection,doc,getDoc,getDocs,setDoc,deleteDoc,serverTimestamp}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
-import{getMessaging,isSupported,getToken,onMessage}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-messaging.js";
+import{getFirestore,collection,doc,getDoc,getDocs,setDoc,deleteDoc}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const c={apiKey:"AIzaSyCe3qaOFx6ey5LAghth8l2cQ9VonSY7hnQ",authDomain:"easy-reminder-system.firebaseapp.com",projectId:"easy-reminder-system",storageBucket:"easy-reminder-system.firebasestorage.app",messagingSenderId:"502381230653",appId:"1:502381230653:web:8a0162b42b25d5356e4854"};
 const a=initializeApp(c);
 let appCheck=null;
 try{appCheck=initializeAppCheck(a,{provider:new ReCaptchaEnterpriseProvider("6LfccbstAAAAAACjUCUaBSbXPPAD0-un914Et1O6"),isTokenAutoRefreshEnabled:true})}catch(e){console.error("Firebase App Check initialization failed:",e)}const auth=getAuth(a),db=getFirestore(a),provider=new GoogleAuthProvider(),fbProvider=new FacebookAuthProvider(),$=i=>document.getElementById(i);
 let user=null,reminders=[],notificationsEnabled=false,view="inbox",query="",labelFilter="",priorityFilter="",idleTimer=null,idleLogoutTimer=null,idleWarningOpen=false,editingId=null,activeLoginAttempt=null;
-const notifiedOccurrences=new Set();
-let pushRegistered=false,pushListener=null;
+const notifiedOccurrences=new Map();
+let notificationAttempt=0,notificationPending=false,nativeNotificationsFailed=false,notificationStorageAvailable=true;
+let recentAlerts=[];
+let authGeneration=0;
+const openNotifications=new Set();
 const IDLE_LIMIT=60000,IDLE_GRACE=30000,now=new Date(),units={once:"one time",minutes:"minute(s)",hours:"hour(s)",days:"day(s)",weeks:"week(s)"};
 $("date").value=now.toISOString().slice(0,10);
 $("startTime").value="09:00";
@@ -30,49 +32,109 @@ $("idleWarning").classList.remove("hidden");
 $("idleStayBtn").focus();
 idleLogoutTimer=setTimeout(signOutForInactivity,IDLE_GRACE)}function resetIdleTimer(){if(idleTimer)clearTimeout(idleTimer);
 idleTimer=null;
-if(!user||idleWarningOpen)return;
+if(!user||idleWarningOpen||(notificationsEnabled&&$("keepReminderSession").checked))return;
 idleTimer=setTimeout(showIdleWarning,IDLE_LIMIT)}["click","keydown","mousemove","touchstart","scroll"].forEach(type=>window.addEventListener(type,resetIdleTimer,{passive:true}));
 $("idleStayBtn").onclick=()=>{hideIdleWarning();
 resetIdleTimer()};
 $("idleSignOutBtn").onclick=signOutForInactivity;
-function notificationRef(){return doc(db,"users",user.uid,"settings","notifications")}function notificationTokenRef(token){return doc(db,"users",user.uid,"notificationTokens",encodeURIComponent(token).slice(0,150))}async function registerPushToken(){
-  pushRegistered=false;
-  if(!user||!(await isSupported()))return;
-  const uid=user.uid;
-  try{
-    const registration=await navigator.serviceWorker.register("./reminder-worker.js",{scope:"./"});
-    const messaging=getMessaging(a);
-    const token=await getToken(messaging,{serviceWorkerRegistration:registration});
-    if(!user||user.uid!==uid||!notificationsEnabled)return;
-    if(token){await setDoc(notificationTokenRef(token),{token,updatedAt:serverTimestamp()});pushRegistered=true;}
-    if(pushListener)pushListener();
-    pushListener=onMessage(messaging,payload=>{
-      if(!user||!notificationsEnabled||Notification.permission!=="granted"||payload.data?.userId!==user.uid)return;
-      const data=payload.data||{},key=data.deliveryId||data.reminderId;
-      if(notifiedOccurrences.has(key))return;
-      new Notification(data.title||payload.notification?.title||"Easy Reminder",{body:data.body||payload.notification?.body||"",tag:"easy-reminder-"+key});
-      notifiedOccurrences.add(key);
-    });
-  }catch(error){console.warn("Could not register push notifications",error);}
+// Spark/free mode: the open page is the scheduler. No FCM tokens, Cloud Functions,
+// service worker, or Firestore polling is involved in delivering these alerts.
+function notificationPreferenceKey(){return "easy-reminder:page-notifications:"+user.uid}
+function receiptKey(){return "easy-reminder:page-receipts:"+user.uid}
+function readLocal(key){try{return localStorage.getItem(key)}catch(_){notificationStorageAvailable=false;return null}}
+function writeLocal(key,value){try{localStorage.setItem(key,value)}catch(_){notificationStorageAvailable=false}}
+function closeNativeNotifications(){for(const item of openNotifications){try{item.close()}catch(_){}}openNotifications.clear()}
+function clearPageAlerts(){recentAlerts=[];$("pageAlertList").innerHTML="";$("pageAlerts").classList.add("hidden");closeNativeNotifications()}
+function showPageAlert(title,body){
+  recentAlerts.unshift({title,body});recentAlerts=recentAlerts.slice(0,10);
+  $("pageAlertList").innerHTML=recentAlerts.map(item=>'<li><strong>'+esc(item.title)+'</strong><p>'+esc(item.body)+'</p></li>').join("");
+  $("pageAlerts").classList.remove("hidden");
 }
-function updateNotificationUi(){let statusEl=$("notificationStatus"),button=$("notificationBtn");if(!statusEl||!button)return;let supported="Notification" in window;statusEl.classList.toggle("enabled",notificationsEnabled);statusEl.textContent=notificationsEnabled?(pushRegistered?"Background push is registered for this browser.":"Notifications enabled while this page is active; background push is not registered."):supported?"Notifications are off for this account.":"This browser does not support notifications.";button.textContent=notificationsEnabled?"Disable notifications":"Enable notifications";button.disabled=!supported&&!notificationsEnabled}async function loadNotificationSetting(){notificationsEnabled=false;if(!user)return;try{let snapshot=await getDoc(notificationRef());notificationsEnabled=Boolean(snapshot.exists()&&snapshot.data().enabled)&&"Notification" in window&&Notification.permission==="granted"}catch(error){console.warn("Could not load notification preference",error)}updateNotificationUi()}function checkDueNotifications(){
-  if(!user||!notificationsEnabled||pushRegistered||!("Notification" in window)||Notification.permission!=="granted")return;
-  const nowMs=Date.now();
-  reminders.forEach(r=>{
+function updateNotificationUi(){
+  const statusEl=$("notificationStatus"),button=$("notificationBtn");if(!statusEl||!button)return;
+  const nativeReady="Notification" in window&&Notification.permission==="granted"&&!nativeNotificationsFailed;
+  const session=notificationsEnabled&&$("keepReminderSession").checked;
+  statusEl.classList.toggle("enabled",notificationsEnabled);
+  statusEl.textContent=notificationsEnabled
+    ?(nativeReady?"Page reminders on; browser notifications allowed.":"Page reminders on; alerts appear inside this page only.")
+      +(session?" This tab will stay signed in.":" Auto sign-out after 90 seconds of inactivity pauses reminders.")
+    :"Page reminders are off for this account in this browser.";
+  if(!notificationStorageAvailable)statusEl.textContent+=" Browser storage is unavailable; settings and duplicate protection last only for this session.";
+  button.textContent=notificationsEnabled?"Disable page reminders":"Enable page reminders";
+  button.disabled=!user||notificationPending;
+  $("keepReminderSession").disabled=!notificationsEnabled;
+}
+function loadNotificationSetting(){
+  notificationsEnabled=false;notificationStorageAvailable=true;
+  if(user)notificationsEnabled=readLocal(notificationPreferenceKey())==="enabled";
+  updateNotificationUi();
+}
+function checkDueNotifications(){
+  if(!user||!notificationsEnabled)return;
+  const nowMs=Date.now(),cutoff=nowMs-TaskCore.DAY;
+  for(const [key,stamp] of notifiedOccurrences)if(stamp<cutoff)notifiedOccurrences.delete(key);
+  // Shared receipts suppress repeats after a reload and across sequential tab checks.
+  // Without cross-tab locking, simultaneous checks in two tabs remain best effort.
+  try{
+    const saved=JSON.parse(readLocal(receiptKey())||"[]");
+    if(Array.isArray(saved))for(const entry of saved){
+      if(Array.isArray(entry)&&typeof entry[0]==="string"&&Number.isFinite(entry[1])&&entry[1]>=cutoff&&entry[1]<=nowMs)notifiedOccurrences.set(entry[0],entry[1]);
+    }
+  }catch(_){}
+  let changed=false;
+  for(const r of reminders){
     try{
       for(const delivery of TaskCore.dueNotifications(r,nowMs)){
         const key=user.uid+":"+r.id+":"+delivery.id;
-        let remembered=false;
-        try{remembered=localStorage.getItem("notification:"+key)==="sent";}catch(_){}
-        if(notifiedOccurrences.has(key)||remembered)continue;
-        new Notification(r.title,{body:TaskCore.summary(r,delivery.start),tag:"easy-reminder-"+key,requireInteraction:true});
-        notifiedOccurrences.add(key);
-        try{localStorage.setItem("notification:"+key,"sent");}catch(_){}
+        if(notifiedOccurrences.has(key))continue;
+        const body=TaskCore.summary(r,delivery.start);
+        showPageAlert(r.title,body);
+        if("Notification" in window&&Notification.permission==="granted"&&!nativeNotificationsFailed){
+          try{
+            const item=new Notification(r.title,{body,tag:"easy-reminder-"+key});
+            openNotifications.add(item);
+            item.onclose=()=>openNotifications.delete(item);
+            // Bound retained browser notifications in a long-running tab.
+            if(openNotifications.size>10){const oldest=openNotifications.values().next().value;oldest.close();openNotifications.delete(oldest)}
+          }catch(_){nativeNotificationsFailed=true;}
+        }
+        notifiedOccurrences.set(key,delivery.scheduled);changed=true;
       }
     }catch(error){console.warn("Invalid reminder schedule",r.id,error);}
-  });
+  }
+  if(changed)writeLocal(receiptKey(),JSON.stringify([...notifiedOccurrences].slice(-2000)));
+  updateNotificationUi();
 }
-async function toggleNotifications(){if(!user)return;if(notificationsEnabled){notificationsEnabled=false;pushRegistered=false;await setDoc(notificationRef(),{enabled:false,updatedAt:serverTimestamp()});updateNotificationUi();return}if(!("Notification" in window)){updateNotificationUi();return}let permission=Notification.permission;if(permission!=="granted")permission=await Notification.requestPermission();if(permission!=="granted"){status("Notifications were not enabled. You can allow them in your browser settings.");return}try{await setDoc(notificationRef(),{enabled:true,updatedAt:serverTimestamp()});notificationsEnabled=true;await registerPushToken();updateNotificationUi();status("Notifications enabled for this account on this browser.");checkDueNotifications()}catch(error){status("Could not save notification preference. Please try again.")}}
+async function toggleNotifications(){
+  if(!user||notificationPending)return;
+  const uid=user.uid,attempt=++notificationAttempt;
+  if(notificationsEnabled){
+    notificationsEnabled=false;$("keepReminderSession").checked=false;
+    writeLocal(notificationPreferenceKey(),"disabled");clearPageAlerts();updateNotificationUi();resetIdleTimer();return;
+  }
+  notificationPending=true;updateNotificationUi();
+  // Permission is requested only from this click, never on sign-in or task save.
+  if("Notification" in window&&Notification.permission==="default"){
+    try{await Notification.requestPermission()}catch(_){}
+  }
+  if(!user||user.uid!==uid||attempt!==notificationAttempt)return;
+  notificationPending=false;notificationsEnabled=true;nativeNotificationsFailed=false;
+  writeLocal(notificationPreferenceKey(),"enabled");updateNotificationUi();resetIdleTimer();
+  status("Page reminders enabled. Keep this page open, signed in, and your device awake.");
+  checkDueNotifications();
+}
+$("keepReminderSession").onchange=()=>{if(notificationsEnabled&&$("keepReminderSession").checked)hideIdleWarning();resetIdleTimer();updateNotificationUi()};
+$("clearPageAlerts").onclick=clearPageAlerts;
+window.addEventListener("focus",()=>{updateNotificationUi();checkDueNotifications()});
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")checkDueNotifications()});
+window.addEventListener("storage",event=>{
+  if(!user)return;
+  if(event.key===notificationPreferenceKey()||event.key===null){
+    loadNotificationSetting();
+    if(!notificationsEnabled){notificationAttempt++;notificationPending=false;$("keepReminderSession").checked=false;clearPageAlerts()}
+    resetIdleTimer();updateNotificationUi();
+  }
+});
 setInterval(checkDueNotifications,15000);function esc(s){return String(s).replace(/[&<>"']/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[x]))}function key(d){let x=new Date(d);
 return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0")}function clock(d){return Number.isNaN(d.getTime())?"":String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")}function taskEnd(r){return new Date(TaskCore.endInstant(r))}
 function normalizeReminder(r){
@@ -150,12 +212,22 @@ function render(){
   $("list").innerHTML=data.map(r=>'<article class="task"><input class="task-check" type="checkbox" data-done="'+esc(r.id)+'" '+(r.done?"checked":"")+' aria-label="Complete '+esc(r.title)+'"><div class="task-body"><div class="task-title '+(r.done?"done":"")+'">'+esc(r.title)+'</div>'+(r.note?'<div class="task-note">'+esc(r.note)+'</div>':'')+'<div class="task-meta"><span class="chip due">'+esc(startLabel(r))+'</span><span class="chip end">'+esc(endLabel(r))+'</span><span class="chip priority-'+(r.priority||"medium")+'">'+esc(priorityName(r.priority||"medium"))+'</span>'+(r.repeat!=="once"?'<span class="chip repeat">↻ '+esc(TaskCore.repeatLabel(r))+'</span>':"")+(r.labels||[]).map(l=>'<span class="chip label">#'+esc(l)+'</span>').join("")+'</div>'+TaskOptions.taskDetails(r)+'</div><div class="task-actions"><button data-edit="'+esc(r.id)+'">Edit</button>'+(!r.done?'<button data-calendar="'+esc(r.id)+'">Google Calendar draft</button>'+(r.guests?.length?'<button data-invite="'+esc(r.id)+'">Draft invitation email</button>':'')+'<button data-snooze="'+esc(r.id)+'">Snooze 10m</button>':"")+'<button class="danger" data-delete="'+esc(r.id)+'">Delete</button></div></article>').join("");
 
 }
-async function load(){let qs=await getDocs(collection(db,"users",user.uid,"reminders"));
-reminders=qs.docs.map(snapshot=>normalizeReminder({...snapshot.data(),id:snapshot.id}));
-if(!reminders.length){let legacy=await getDoc(doc(db,"users/"+user.uid));
-let old=legacy.exists()&&Array.isArray(legacy.data().reminders)?legacy.data().reminders:[],migrated=old.map(normalizeReminder);
-for(const r of migrated)await saveReminder(r);
-reminders=migrated}render()}function updateRepeatFields(){TaskOptions.sync()}
+async function load(){
+  const uid=user.uid,generation=authGeneration;
+  const stillCurrent=()=>user?.uid===uid&&generation===authGeneration;
+  const qs=await getDocs(collection(db,"users",uid,"reminders"));
+  if(!stillCurrent())return;
+  let loaded=qs.docs.map(snapshot=>normalizeReminder({...snapshot.data(),id:snapshot.id}));
+  if(!loaded.length){
+    const legacy=await getDoc(doc(db,"users/"+uid));
+    if(!stillCurrent())return;
+    const old=legacy.exists()&&Array.isArray(legacy.data().reminders)?legacy.data().reminders:[];
+    loaded=old.map(normalizeReminder);
+    for(const r of loaded){if(!stillCurrent())return;await setDoc(doc(db,"users",uid,"reminders",r.id),r)}
+  }
+  if(!stillCurrent())return;
+  reminders=loaded;render();
+}function updateRepeatFields(){TaskOptions.sync()}
 function resetTaskForm(){editingId=null;
 $("form").reset();
 let current=new Date();
@@ -353,20 +425,26 @@ document.addEventListener("click",async e=>{
   }catch(error){status(saveErrorMessage(error));render();}
 });
 onAuthStateChanged(auth,async u=>{user=u;
+const generation=++authGeneration;
+if(idleTimer)clearTimeout(idleTimer);idleTimer=null;hideIdleWarning();
+notificationAttempt++;notificationPending=false;notificationsEnabled=false;nativeNotificationsFailed=false;
+notifiedOccurrences.clear();reminders=[];clearPageAlerts();
+$("list").innerHTML="";
+$("keepReminderSession").checked=false;
 if(u){$("loginGate").classList.add("hidden");
 $("app").classList.remove("hidden");
 $("notificationControl")?.classList.remove("hidden");
 $("quickAdd").classList.add("hidden");
 $("userEmail").textContent=u.email||"Signed in";
 $("sidebarUser").textContent=u.email||"Signed in";
-try{await loadNotificationSetting();await load();if(notificationsEnabled){await registerPushToken();updateNotificationUi();}
-requestAnimationFrame(()=>$("taskSection").scrollIntoView({behavior:"smooth",block:"start"}))}catch(e){status("Could not load reminders. Check Firestore rules.")}}else{if(idleTimer)clearTimeout(idleTimer);
+try{loadNotificationSetting();await load();if(generation!==authGeneration)return;updateNotificationUi();checkDueNotifications();
+requestAnimationFrame(()=>$("taskSection").scrollIntoView({behavior:"smooth",block:"start"}))}catch(e){if(generation!==authGeneration)return;status("Could not load reminders. Check Firestore rules.")}}else{if(idleTimer)clearTimeout(idleTimer);
 idleTimer=null;
 hideIdleWarning();
 $("loginGate").classList.remove("hidden");
 $("app").classList.add("hidden");
 $("notificationControl")?.classList.add("hidden");
-reminders=[];notificationsEnabled=false;pushRegistered=false;notifiedOccurrences.clear();if(pushListener){pushListener();pushListener=null;}updateNotificationUi()}resetIdleTimer()});
+updateNotificationUi()}resetIdleTimer()});
 
 
 // Completed-task archive: completed reminders remain recoverable for 30 days.

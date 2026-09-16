@@ -16,4 +16,12 @@
 .task-links a { color: #315a9b; }
 .task-options-meta { margin-top: 7px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .quick-add { scroll-margin-top: 20px; }
+.notification-control { position: static; width: auto; margin: 0 0 24px; }
+.notification-help { display: block; font-size: 11px; line-height: 1.5; color: var(--muted); margin: 8px 0; }
+.reminder-session { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; margin-top: 12px; }
+.reminder-session input { flex-shrink: 0; margin-top: 3px; }
+.page-alerts { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+#pageAlertList { padding-left: 18px; font-size: 12px; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
+#pageAlertList li { margin: 10px 0; }
+#pageAlertList p { white-space: pre-wrap; margin: 4px 0; }
 @media (max-width: 560px) { .notification-row { flex-wrap: wrap; } .notification-row > select:first-child { flex-basis: 100%; } .notification-control { position: static; margin: 0 16px 16px; width: auto; } }

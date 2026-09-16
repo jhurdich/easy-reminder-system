@@ -21,6 +21,15 @@ real SDK error codes, retry, successful auth-state handling, restricted session 
 and required CSP source entries.
 App Check remains initialized; tests make no requests to Firebase or OAuth providers.
 
+The free-plan checks also run the production page-reminder flow with a simulated
+clock, local storage, browser permission, and notification constructor. They verify
+no FCM registration or notification-related Firestore writes, multiple offsets,
+summary contents, denied/unsupported notifications, blocked storage, reload receipts,
+private-alert clearing, stale account-load and permission-request races, and the
+explicit trusted-tab session option. `firebase-deploy.json` must contain rules only.
+The older backend/worker tests are retained for historical source; those components
+are not part of free-plan deployment. No backend dependency installation is needed.
+
 The CSP entries follow Google's [reCAPTCHA guidance](https://developers.google.com/recaptcha/docs/faq#im-using-content-security-policy-csp-on-my-website-how-can-i-configure-it-to-work-with-recaptcha)
 and Firebase's [popup loader](https://github.com/firebase/firebase-js-sdk/blob/main/packages/auth/src/platform_browser/iframe/gapi.ts)
 and [script URLs](https://github.com/firebase/firebase-js-sdk/blob/main/packages/auth/src/platform_browser/index.ts).

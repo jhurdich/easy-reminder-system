@@ -7,12 +7,9 @@ const crypto = require('node:crypto');
 const core = require('../functions-correct/task-core.js');
 const source = readFileSync(path.join(__dirname, '../functions-correct/index.js'), 'utf8');
 
-test('deployment pins the supported cloud runtime independently of local tooling', () => {
+test('free-plan deployment contains only Firestore rules and cannot deploy functions', () => {
   const config = JSON.parse(readFileSync(path.join(__dirname, '../firebase-deploy.json'), 'utf8'));
-  const pkg = JSON.parse(readFileSync(path.join(__dirname, '../functions-correct/package.json'), 'utf8'));
-  assert.equal(config.functions.source, 'functions-correct');
-  assert.equal(config.functions.runtime, 'nodejs22');
-  assert.equal(pkg.engines.node, '>=22');
+  assert.deepEqual(config, { firestore: { rules: 'firestore.rules' } });
 });
 
 test('backend targets the reviewed Admin 14 and compatible Functions 7 releases', () => {

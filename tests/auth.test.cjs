@@ -11,10 +11,13 @@ const html = readFileSync(path.join(root, 'reminder-system.html'), 'utf8');
 
 // Execute the entire production ES module with isolated Firebase/DOM doubles.
 // No network requests, real credentials, or production reminder data are used.
-async function startApp({ deferCancellation = false, reminderDocs = [], allowReminderWrites = false } = {}) {
+async function startApp({ deferCancellation = false, reminderDocs = [], allowReminderWrites = false,
+  nowMs = Date.now(), storage = new Map(), storageBlocked = false, nativeSupported = true,
+  notificationPermission = 'granted', permissionRequest, notificationThrows = false } = {}) {
   const events = new Map();
   const documentEvents = new Map();
   const timers = new Map();
+  const intervals = new Map();
   let timerId = 0;
   let clock = 0;
   const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => {
@@ -45,7 +48,21 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     assert.ok(label, 'The login button exists in the production HTML: ' + id);
     elements.get(id).innerHTML = label[1];
   }
-  const calls = { order: [], popups: [], cancelledPopups: [], signouts: 0, redirects: 0, navigations: [], reads: [], writes: [] };
+  const calls = { order: [], popups: [], cancelledPopups: [], signouts: 0, redirects: 0, navigations: [], reads: [], writes: [], notifications: [], permissionRequests: 0, nativeCloses: 0 };
+  class TestNotification {
+    static permission = notificationPermission;
+    static async requestPermission() {
+      calls.permissionRequests++;
+      const permission = permissionRequest ? await permissionRequest() : 'granted';
+      this.permission = permission;
+      return permission;
+    }
+    constructor(title, options) {
+      if (notificationThrows) throw new TypeError('Notification constructor not supported');
+      calls.notifications.push({ title, ...options });
+    }
+    close() { calls.nativeCloses++; this.onclose?.(); }
+  }
   const deferredCancellations = [];
   let authListener;
   let pendingPopup;
@@ -88,8 +105,9 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     doc: (db, ...segments) => segments,
     async getDocs(ref) {
       calls.reads.push(ref);
+      const entries = typeof reminderDocs === 'function' ? await reminderDocs(ref) : reminderDocs;
       return {
-        docs: reminderDocs.map(entry => {
+        docs: entries.map(entry => {
           const value = entry.data || entry;
           return { id: entry.documentId || value.id, data: () => ({ ...value }) };
         })
@@ -104,7 +122,17 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
   };
   const context = vm.createContext({
     console, URL, URLSearchParams, crypto: { randomUUID },
+    Date: class extends Date {
+      constructor(...args) { super(...(args.length ? args : [nowMs + clock])); }
+      static now() { return nowMs + clock; }
+    },
+    ...(nativeSupported ? { Notification: TestNotification } : {}),
+    localStorage: {
+      getItem(key) { if (storageBlocked) throw new Error('Storage blocked'); return storage.get(key) ?? null; },
+      setItem(key, value) { if (storageBlocked) throw new Error('Storage blocked'); storage.set(key, value); }
+    },
     document: {
+      visibilityState: 'visible',
       getElementById: id => elements.get(id), querySelectorAll: () => [],
       querySelector: () => ({ appendChild() {} }),
       createElement() {
@@ -132,6 +160,7 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
       }
     },
     window: {
+      ...(nativeSupported ? { Notification: TestNotification } : {}),
       addEventListener(type, callback, options = {}) {
         const listeners = events.get(type) || [];
         listeners.push({ callback, once: options.once }); events.set(type, listeners);
@@ -146,7 +175,7 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
       removeItem() { throw new Error('Storage access denied'); }
     },
     setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, at: clock + delay }); return id; },
-    setInterval() { return ++timerId; },
+    setInterval(callback, delay) { const id = ++timerId; intervals.set(id, { callback, delay }); return id; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: callback => callback()
   });
@@ -164,17 +193,27 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
   assert.equal(typeof authListener, 'function', 'Auth state listener is installed');
   await authListener(null);
   return {
-    elements, calls, taskOptions: context.TaskOptions,
+    elements, calls, storage, notification: TestNotification, taskOptions: context.TaskOptions,
     finishCancellations() { deferredCancellations.splice(0).forEach(cancel => cancel()); },
     click: id => elements.get(id).onclick(),
     async documentClick(dataset, extra = {}) {
       for (const callback of documentEvents.get('click') || []) await callback({ target: { dataset, checked: false, ...extra } });
     },
-    dispatch(type) {
+    dispatch(type, event = {}) {
       const listeners = events.get(type) || [];
       events.set(type, listeners.filter(listener => !listener.once));
-      for (const listener of listeners) listener.callback();
+      for (const listener of listeners) listener.callback(event);
     },
+    async visibility(value) {
+      context.document.visibilityState = value;
+      for (const callback of documentEvents.get('visibilitychange') || []) await callback();
+    },
+    tickNotifications() { for (const timer of intervals.values()) if (timer.delay === 15000) timer.callback(); },
+    async setUser(uid) {
+      auth.currentUser = uid ? { uid, email: uid + '@example.invalid' } : null;
+      await authListener(auth.currentUser);
+    },
+    keepSession(enabled) { const el = elements.get('keepReminderSession'); el.checked = enabled; el.onchange(); },
     async advance(ms) {
       const target = clock + ms;
       while (true) {
@@ -199,6 +238,201 @@ function assertNoNavigationOrSignout(app) {
   assert.equal(app.calls.redirects, 0);
   assert.deepEqual(app.calls.navigations, []);
 }
+
+const pageReminderNow = Date.parse('2027-01-20T08:50:00Z');
+function pageReminder(overrides = {}) {
+  return { id: 'page-task', title: 'Review <agenda>', note: '', labels: [], priority: 'medium',
+    date: '2027-01-20', endDate: '2027-01-20', next: '2027-01-20T09:00:00Z',
+    startTime: '09:00', endTime: '10:00', timeZone: 'UTC', repeat: 'once', amount: 0,
+    done: false, notifications: [10, 5], locationType: 'address', location: '123 Main St',
+    scheduleVersion: 'one', ...overrides };
+}
+
+test('free mode has no Messaging imports, push registration, or notification database writes', async () => {
+  assert.doesNotMatch(source, /firebase-messaging\.js|registerPushToken|getToken\(|serviceWorker\.register|notificationTokens/);
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder()], notificationPermission: 'default' });
+  await app.setUser('test-user');
+  assert.equal(app.calls.permissionRequests, 0, 'sign-in never asks for notification permission');
+  const reads = app.calls.reads.length;
+  await app.click('notificationBtn');
+  app.tickNotifications();
+  assert.equal(app.calls.permissionRequests, 1);
+  assert.equal(app.calls.writes.length, 0);
+  assert.equal(app.calls.reads.length, reads, 'checking due alerts does not poll Firestore');
+  assert.match(app.elements.get('notificationStatus').textContent, /Page reminders on/);
+  assert.doesNotMatch(app.elements.get('notificationStatus').textContent, /Background push/);
+});
+
+test('page reminders include task, place and both times and deliver each offset only once', async () => {
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder()] });
+  await app.setUser('test-user');
+  app.tickNotifications(); assert.equal(app.calls.notifications.length, 0);
+  await app.click('notificationBtn');
+  app.keepSession(true);
+  app.tickNotifications(); app.tickNotifications();
+  assert.equal(app.calls.notifications.length, 1);
+  for (const text of ['Review <agenda>', '123 Main St', '9:00', '10:00', 'UTC']) {
+    assert.ok(app.calls.notifications[0].body.includes(text));
+  }
+  assert.match(app.elements.get('pageAlertList').innerHTML, /Review &lt;agenda&gt;/);
+  assert.doesNotMatch(app.elements.get('pageAlertList').innerHTML, /<agenda>/);
+  await app.advance(5 * 60000);
+  app.tickNotifications(); app.tickNotifications();
+  assert.equal(app.calls.notifications.length, 2);
+  assert.notEqual(app.calls.notifications[0].tag, app.calls.notifications[1].tag);
+  app.click('clearPageAlerts'); app.tickNotifications();
+  assert.equal(app.elements.get('pageAlerts').classList.contains('hidden'), true);
+  assert.equal(app.calls.notifications.length, 2, 'dismiss does not re-deliver the occurrence');
+});
+
+test('saved preferences and receipts survive reloads without repeating sent occurrences', async () => {
+  const storage = new Map();
+  const options = { nowMs: pageReminderNow, reminderDocs: [pageReminder()], storage };
+  const first = await startApp(options); await first.setUser('test-user');
+  await first.click('notificationBtn'); first.keepSession(true);
+  const second = await startApp(options); await second.setUser('test-user'); second.tickNotifications();
+  assert.equal(second.calls.notifications.length, 0);
+  assert.equal(second.elements.get('notificationBtn').textContent, 'Disable page reminders');
+  assert.equal(second.elements.get('keepReminderSession').checked, false, 'trusted-device opt-in never persists');
+  await second.click('notificationBtn');
+  first.dispatch('storage', { key: 'easy-reminder:page-notifications:test-user' });
+  assert.equal(first.elements.get('notificationBtn').textContent, 'Enable page reminders');
+  assert.equal(first.elements.get('keepReminderSession').checked, false);
+});
+
+for (const [label, options] of [
+  ['denied permission', { notificationPermission: 'denied' }],
+  ['unsupported browser', { nativeSupported: false }],
+  ['mobile constructor failure', { notificationThrows: true }],
+  ['permission request failure', { notificationPermission: 'default', permissionRequest: async () => { throw new Error('not supported'); } }]
+]) test('in-page alerts still work with ' + label, async () => {
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder()], ...options });
+  await app.setUser('test-user'); await app.click('notificationBtn'); app.tickNotifications();
+  assert.equal(app.calls.notifications.length, 0);
+  assert.equal(app.elements.get('pageAlerts').classList.contains('hidden'), false);
+  assert.match(app.elements.get('pageAlertList').innerHTML, /123 Main St/);
+  assert.match(app.elements.get('notificationStatus').textContent, /inside this page only/);
+});
+
+test('blocked storage keeps page reminders usable and deduplicated for the session', async () => {
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder()], storageBlocked: true });
+  await app.setUser('test-user'); await app.click('notificationBtn');
+  app.tickNotifications(); app.tickNotifications();
+  assert.equal(app.calls.notifications.length, 1);
+  assert.match(app.elements.get('notificationStatus').textContent, /storage is unavailable/);
+});
+
+test('completed, notification-free and stale tasks do not alert; recent reminders catch up on resume', async () => {
+  const docs = [pageReminder({ done: true }), pageReminder({ id: 'silent', notifications: [] }),
+    pageReminder({ id: 'stale', next: '2027-01-20T08:00:00Z', startTime: '08:00', notifications: [0] }),
+    pageReminder({ id: 'recent', notifications: [5] })];
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: docs });
+  await app.setUser('test-user'); await app.click('notificationBtn'); app.keepSession(true);
+  assert.equal(app.calls.notifications.length, 0);
+  await app.advance(6 * 60000); await app.visibility('visible'); app.dispatch('focus');
+  assert.equal(app.calls.notifications.length, 1);
+  assert.match(app.calls.notifications[0].tag, /recent/);
+});
+
+test('free alerts keep the inactivity timeout unless the user explicitly opts in', async () => {
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder()] });
+  await app.setUser('test-user'); await app.click('notificationBtn');
+  assert.equal(app.elements.get('keepReminderSession').checked, false);
+  await app.advance(90000);
+  assert.equal(app.calls.signouts, 1);
+  assert.equal(app.elements.get('pageAlerts').classList.contains('hidden'), true);
+  assert.equal(app.elements.get('pageAlertList').innerHTML, '');
+  assert.ok(app.calls.nativeCloses > 0);
+});
+
+test('trusted-tab opt-in survives inactivity, and disabling alerts restores auto sign-out', async () => {
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder()] });
+  await app.setUser('test-user'); await app.click('notificationBtn'); app.keepSession(true);
+  await app.advance(600000);
+  assert.equal(app.calls.signouts, 0);
+  assert.match(app.elements.get('notificationStatus').textContent, /tab will stay signed in/);
+  await app.click('notificationBtn');
+  assert.equal(app.elements.get('keepReminderSession').checked, false);
+  await app.advance(90000);
+  assert.equal(app.calls.signouts, 1);
+  app.tickNotifications(); assert.equal(app.calls.notifications.length, 1);
+});
+
+test('unchecking the trusted-tab option restarts the existing inactivity timeout', async () => {
+  const app = await startApp(); await app.setUser('test-user');
+  await app.click('notificationBtn'); app.keepSession(true);
+  await app.advance(180000); app.keepSession(false); await app.advance(90000);
+  assert.equal(app.calls.signouts, 1);
+});
+
+test('sign-out and account switching cancel pending permission requests and clear private alerts', async () => {
+  let resolvePermission;
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder()],
+    notificationPermission: 'default', permissionRequest: () => new Promise(resolve => { resolvePermission = resolve; }) });
+  await app.setUser('first-user');
+  const enabling = app.click('notificationBtn');
+  await app.setUser('second-user');
+  resolvePermission('granted'); await enabling;
+  assert.equal(app.elements.get('notificationBtn').textContent, 'Enable page reminders');
+  assert.equal(app.storage.has('easy-reminder:page-notifications:second-user'), false);
+  assert.equal(app.calls.notifications.length, 0);
+  await app.click('notificationBtn'); app.keepSession(true);
+  assert.equal(app.calls.notifications.length, 1);
+  await app.setUser(null); app.tickNotifications();
+  assert.equal(app.elements.get('pageAlertList').innerHTML, '');
+  assert.equal(app.elements.get('keepReminderSession').checked, false);
+  await app.setUser('first-user'); app.tickNotifications();
+  assert.equal(app.calls.notifications.length, 1);
+});
+
+test('a stale reminder load cannot deliver another account’s task after switching users', async () => {
+  let resolveOld;
+  const storage = new Map([['easy-reminder:page-notifications:new-user', 'enabled']]);
+  const app = await startApp({ nowMs: pageReminderNow, storage,
+    reminderDocs: ref => ref[1] === 'old-user' ? new Promise(resolve => { resolveOld = resolve; }) : [] });
+  const loadingOld = app.setUser('old-user');
+  await app.setUser('new-user');
+  resolveOld([pageReminder({ title: 'Private old task' })]); await loadingOld;
+  app.tickNotifications();
+  assert.equal(app.calls.notifications.length, 0);
+  assert.doesNotMatch(app.elements.get('list').innerHTML, /Private old task/);
+});
+
+test('recent in-page alerts are bounded to ten entries', async () => {
+  const reminderDocs = Array.from({ length: 12 }, (_, i) => pageReminder({ id: 'task-' + i }));
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs });
+  await app.setUser('test-user'); await app.click('notificationBtn');
+  assert.equal((app.elements.get('pageAlertList').innerHTML.match(/<li>/g) || []).length, 10);
+  assert.equal(app.calls.nativeCloses, 2);
+});
+
+test('a repeating page reminder delivers a distinct next-day occurrence', async () => {
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder({ repeat: 'daily', notifications: [10] })] });
+  await app.setUser('test-user'); await app.click('notificationBtn'); app.keepSession(true);
+  assert.equal(app.calls.notifications.length, 1);
+  await app.advance(24 * 60 * 60000); app.tickNotifications(); app.tickNotifications();
+  assert.equal(app.calls.notifications.length, 2);
+  assert.notEqual(app.calls.notifications[0].tag, app.calls.notifications[1].tag);
+});
+
+test('a suspended page does not replay alerts older than the recovery window', async () => {
+  const app = await startApp({ nowMs: pageReminderNow, reminderDocs: [pageReminder({ notifications: [5] })] });
+  await app.setUser('test-user'); await app.click('notificationBtn'); app.keepSession(true);
+  await app.advance(11 * 60000); await app.visibility('visible');
+  assert.equal(app.calls.notifications.length, 0);
+});
+
+test('pending native permission stays single-flight even after the page regains focus', async () => {
+  let resolvePermission;
+  const app = await startApp({ notificationPermission: 'default', permissionRequest: () => new Promise(resolve => { resolvePermission = resolve; }) });
+  await app.setUser('test-user');
+  const first = app.click('notificationBtn');
+  app.dispatch('focus'); await app.click('notificationBtn');
+  assert.equal(app.calls.permissionRequests, 1);
+  assert.equal(app.elements.get('notificationBtn').disabled, true);
+  resolvePermission('granted'); await first;
+  assert.equal(app.elements.get('notificationBtn').disabled, false);
+});
 
 test('the HTML loads an ES module that starts both providers and App Check', async () => {
   assert.match(html, /<script type="module" src="reminder-system\.js(?:\?[^\"]+)?"><\/script>/);
