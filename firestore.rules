@@ -47,6 +47,15 @@ service cloud.firestore {
         allow delete: if isOwner(userId);
       }
 
+      match /notificationTokens/{tokenId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && request.resource.data.keys().hasOnly(['token', 'updatedAt'])
+          && request.resource.data.token is string
+          && request.resource.data.token.size() > 0
+          && request.resource.data.token.size() <= 500;
+      }
+
       match /settings/{settingId} {
         allow read: if isOwner(userId);
         allow create, update: if isOwner(userId)
