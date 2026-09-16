@@ -7,7 +7,7 @@ const c={apiKey:"AIzaSyCe3qaOFx6ey5LAghth8l2cQ9VonSY7hnQ",authDomain:"easy-remin
 const a=initializeApp(c);
 let appCheck=null;
 try{appCheck=initializeAppCheck(a,{provider:new ReCaptchaEnterpriseProvider("6LfccbstAAAAAACjUCUaBSbXPPAD0-un914Et1O6"),isTokenAutoRefreshEnabled:true})}catch(e){console.error("Firebase App Check initialization failed:",e)}const auth=getAuth(a),db=getFirestore(a),provider=new GoogleAuthProvider(),fbProvider=new FacebookAuthProvider(),$=i=>document.getElementById(i);
-let user=null,reminders=[],view="inbox",query="",labelFilter="",priorityFilter="",idleTimer=null,idleLogoutTimer=null,idleWarningOpen=false,editingId=null,activeLoginAttempt=null;
+let user=null,reminders=[],view="inbox",query="",labelFilter="",priorityFilter="",idleTimer=null,idleLogoutTimer=null,idleWarningOpen=false,editingId=null,activeLoginAttempt=null,notificationsEnabled=false;
 const IDLE_LIMIT=60000,IDLE_GRACE=30000,now=new Date(),units={once:"one time",minutes:"minute(s)",hours:"hour(s)",days:"day(s)",weeks:"week(s)"};
 $("date").value=now.toISOString().slice(0,10);
 $("startTime").value="09:00";
@@ -198,6 +198,8 @@ $("facebookSignInBtn").onclick = () =>
 $("signInBtn").onclick = () =>
   loginWithPopup("signInBtn", "Google", provider);
 
+if($("notificationBtn"))$("notificationBtn").onclick=toggleNotifications;
+
 $("signOutBtn").onclick=()=>signOut(auth);
 $("search").oninput=e=>{query=e.target.value;
 render()};
@@ -254,13 +256,15 @@ await saveReminder(r)}render()});
 onAuthStateChanged(auth,async u=>{user=u;
 if(u){$("loginGate").classList.add("hidden");
 $("app").classList.remove("hidden");
+$("notificationControl")?.classList.remove("hidden");
 $("quickAdd").classList.add("hidden");
 $("userEmail").textContent=u.email||"Signed in";
 $("sidebarUser").textContent=u.email||"Signed in";
-try{await load();
+try{await loadNotificationSetting();await load();
 requestAnimationFrame(()=>$("taskSection").scrollIntoView({behavior:"smooth",block:"start"}))}catch(e){status("Could not load reminders. Check Firestore rules.")}}else{if(idleTimer)clearTimeout(idleTimer);
 idleTimer=null;
 hideIdleWarning();
 $("loginGate").classList.remove("hidden");
 $("app").classList.add("hidden");
-reminders=[]}resetIdleTimer()});
+$("notificationControl")?.classList.add("hidden");
+reminders=[];notificationsEnabled=false;updateNotificationUi()}resetIdleTimer()});
