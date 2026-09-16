@@ -46,6 +46,15 @@ service cloud.firestore {
         allow create, update: if isOwner(userId) && isValidReminder();
         allow delete: if isOwner(userId);
       }
+
+      match /settings/{settingId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && settingId == 'notifications'
+          && request.resource.data.keys().hasOnly(['enabled', 'updatedAt'])
+          && request.resource.data.enabled is bool;
+        allow delete: if isOwner(userId);
+      }
     }
   }
 }
