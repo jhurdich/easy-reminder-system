@@ -1,12 +1,14 @@
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { logger } = require("firebase-functions");
+const logger = require("firebase-functions/logger");
 const { createHash, randomUUID } = require("node:crypto");
-const admin = require("firebase-admin");
+const { initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
+const { getMessaging } = require("firebase-admin/messaging");
 const core = require("./task-core.js");
 
-admin.initializeApp();
-const db = admin.firestore();
-const messaging = admin.messaging();
+initializeApp();
+const db = getFirestore();
+const messaging = getMessaging();
 const hash = value => createHash("sha256").update(value).digest("hex");
 
 // Shared by browser fallback and push, so offsets/recurrence use identical semantics.

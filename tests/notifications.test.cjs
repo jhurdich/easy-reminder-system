@@ -15,8 +15,17 @@ test('deployment pins the supported cloud runtime independently of local tooling
   assert.equal(pkg.engines.node, '>=22');
 });
 
+test('backend targets the reviewed Admin 14 and compatible Functions 7 releases', () => {
+  const pkg = JSON.parse(readFileSync(path.join(__dirname, '../functions-correct/package.json'), 'utf8'));
+  assert.equal(pkg.dependencies['firebase-admin'], '14.4.0');
+  assert.equal(pkg.dependencies['firebase-functions'], '7.4.0');
+  assert.equal(pkg.scripts.check, 'node check-sdk.cjs');
+});
+
 function scheduler({ enabled = true, tokens = ['token-a', 'token-b'], responder, done = false } = {}) {
   let now = Date.parse('2027-01-20T08:50:00Z');
+  let initialized = false;
+  const imports = [];
   const sent = [], errors = [];
   const store = new Map();
   const reminderPath = 'users/owner/reminders/task';
@@ -41,19 +50,49 @@ function scheduler({ enabled = true, tokens = ['token-a', 'token-b'], responder,
   vm.runInNewContext(source, {
     exports, Date: class extends Date { static now() { return now; } },
     require(name) {
+      imports.push(name);
       if (name === './task-core.js') return core;
       if (name === 'node:crypto') return crypto;
       if (name === 'firebase-functions/v2/scheduler') return { onSchedule: (cadence, fn) => fn };
-      if (name === 'firebase-functions') return { logger: { error: (...e) => errors.push(e) } };
-      if (name === 'firebase-admin') return { initializeApp() {}, firestore: () => db, messaging: () => ({ async sendEachForMulticast(payload) {
+      if (name === 'firebase-functions/logger') return { error: (...e) => errors.push(e) };
+      if (name === 'firebase-admin/app') return { initializeApp() { assert.equal(initialized, false); initialized = true; } };
+      if (name === 'firebase-admin/firestore') return { getFirestore() { assert.ok(initialized); return db; } };
+      if (name === 'firebase-admin/messaging') return { getMessaging() { assert.ok(initialized); return { async sendEachForMulticast(payload) {
         sent.push(payload);
         return { responses: payload.tokens.map(token => responder ? responder(token, sent.length) : { success: true }) };
-      } }) };
+      } }; } };
       throw new Error('Unexpected dependency ' + name);
     }
   });
-  return { run: exports.sendDueReminderNotifications, sent, store, errors, reminderPath, setNow: value => { now = Date.parse(value); } };
+  return { run: exports.sendDueReminderNotifications, sent, store, errors, imports, initialized, reminderPath, setNow: value => { now = Date.parse(value); } };
 }
+test('backend initializes modular Admin services without the removed namespace API', () => {
+  const s = scheduler();
+  assert.equal(s.initialized, true);
+  for (const name of ['firebase-admin/app', 'firebase-admin/firestore', 'firebase-admin/messaging', 'firebase-functions/logger']) {
+    assert.ok(s.imports.includes(name));
+  }
+  assert.equal(s.imports.includes('firebase-admin'), false);
+  assert.equal(s.sent.length, 0);
+});
+
+test('installed SDK check verifies the export without invoking the scheduled job', () => {
+  let calls = 0;
+  function job() { calls++; }
+  job.run = () => { calls++; };
+  job.__endpoint = { platform: 'gcfv2', scheduleTrigger: { schedule: 'every 1 minutes' } };
+  const logs = [];
+  vm.runInNewContext(readFileSync(path.join(__dirname, '../functions-correct/check-sdk.cjs'), 'utf8'), {
+    require(name) {
+      if (name === 'node:assert/strict') return assert;
+      if (name === './index.js') return { sendDueReminderNotifications: job };
+      throw new Error('Unexpected dependency ' + name);
+    },
+    console: { log: message => logs.push(message) }
+  });
+  assert.equal(calls, 0);
+  assert.equal(logs.length, 1);
+});
 test('push sends task, location and both times once for each configured offset', async () => {
   const s = scheduler(); await s.run(); await s.run();
   assert.equal(s.sent.length, 1); assert.equal(s.sent[0].notification, undefined);

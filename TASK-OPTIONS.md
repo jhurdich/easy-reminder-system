@@ -22,14 +22,25 @@ Automatic Google Calendar guest invitations and Meet creation require an authori
 This repository serves the frontend through GitHub Pages, but GitHub Pages does **not** deploy Firestore rules or Cloud Functions. The old rules reject the new fields. Do not publish just the HTML/JavaScript before deploying the matching rules.
 
 1. Check out the feature branch locally and run the tests below. Review the changes to `firestore.rules` before production deployment. Existing owner-only access remains; guest emails grant no read/write permissions.
-2. From an already-authorized Firebase development environment, install the function dependencies and deploy using the existing project/configuration:
+2. From an already-authorized Firebase development environment, install the function dependencies and check them:
 
    ```sh
    npm --prefix functions-correct install
+   npm --prefix functions-correct audit
+   npm --prefix functions-correct run check
+   ```
+
+   Review audit findings and any unapproved install scripts before deployment. `npm --prefix functions-correct install-scripts ls` lists pending scripts on npm versions supporting that command. Do not use blanket script approvals or `npm audit fix --force`. The SDK load check loads the real installed dependencies and verifies the scheduled-function export; it does not run the job or send notifications.
+
+   Then deploy using the existing project/configuration:
+
+   ```sh
    npx firebase-tools deploy --project easy-reminder-system --config firebase-deploy.json --only firestore:rules,functions:sendDueReminderNotifications
    ```
 
    The configuration explicitly deploys `nodejs22`; the package accepts Node.js 22+ for local tooling, including Node.js 24. Keep the `--config firebase-deploy.json` argument: it selects the correct function source and cloud runtime. Node.js 20 is deprecated according to [Google's runtime schedule](https://docs.cloud.google.com/run/docs/runtimes/function-runtimes).
+
+   The backend pins `firebase-admin` 14.4.0 and `firebase-functions` 7.4.0. Admin 14.4.0 updates the Firestore and Storage dependency chains implicated by the `uuid` audit report; Admin 14 also removes the legacy namespace API, so this backend uses the modular `app`, `firestore`, and `messaging` entry points. Functions 7.4.0 declares Admin 14 compatibility. See the [Admin release notes](https://firebase.google.com/support/release-notes/admin/node) and [Functions package metadata](https://github.com/firebase/firebase-functions/blob/v7.4.0/package.json). Re-run the audit on the installed tree; version selection alone is not proof of a clean audit. No install scripts are automatically approved by this change.
 
    Confirm the scheduled function exists and the `reminders` collection-group query succeeds. Configure an index if Firebase asks for one. This can require a billing-enabled Firebase project and authorized deployment access. No deployment, billing change, or credential setup was performed by this change.
 
