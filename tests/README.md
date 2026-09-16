@@ -1,5 +1,11 @@
 # Authentication regression checks
 
+The expanded task form and scheduling checks are documented in [TASK-OPTIONS.md](../TASK-OPTIONS.md). Run all suites with:
+
+```sh
+node --experimental-vm-modules --test tests/auth.test.cjs tests/task-core.test.cjs tests/notifications.test.cjs
+```
+
 Run from the repository root with Node.js 24. No package installation is required:
 
 ```sh

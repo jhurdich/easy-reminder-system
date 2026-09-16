@@ -15,7 +15,11 @@ service cloud.firestore {
         function isValidReminder() {
           return request.resource.data.keys().hasOnly([
               'id', 'title', 'note', 'labels', 'repeat', 'amount',
-              'priority', 'next', 'startTime', 'endTime', 'done'
+              'priority', 'next', 'startTime', 'endTime', 'done', 'completedAt',
+              'schemaVersion', 'date', 'endDate', 'timeZone', 'allDay',
+              'locationType', 'location', 'conferenceType', 'conferenceUrl',
+              'driveUrl', 'guests', 'category', 'notifications', 'customMode',
+              'customDates', 'rangeEnd', 'scheduleVersion', 'scheduleUpdatedAt'
             ])
             && request.resource.data.keys().hasAll([
               'id', 'title', 'note', 'labels', 'repeat', 'amount',
@@ -28,7 +32,7 @@ service cloud.firestore {
             && request.resource.data.note.size() <= 2000
             && request.resource.data.labels is list
             && request.resource.data.labels.size() <= 20
-            && request.resource.data.repeat in ['once', 'minutes', 'hours', 'days', 'weeks']
+            && request.resource.data.repeat in ['once', 'minutes', 'hours', 'days', 'weeks', 'daily', 'weekly', 'monthly', 'annually', 'custom']
             && request.resource.data.amount is int
             && request.resource.data.amount >= 0
             && request.resource.data.amount <= 100000
@@ -39,7 +43,55 @@ service cloud.firestore {
             && request.resource.data.startTime.size() == 5
             && request.resource.data.endTime is string
             && request.resource.data.endTime.size() == 5
-            && request.resource.data.done is bool;
+            && request.resource.data.done is bool
+            && (!('completedAt' in request.resource.data) || (request.resource.data.completedAt is string && request.resource.data.completedAt.size() <= 40))
+            && (('schemaVersion' in request.resource.data) ? validExpandedReminder() : request.resource.data.keys().hasOnly([
+              'id', 'title', 'note', 'labels', 'repeat', 'amount', 'priority', 'next', 'startTime', 'endTime', 'done', 'completedAt'
+            ]));
+        }
+
+        function validOffset(values, index) {
+          return values.size() <= index || (values[index] is int && values[index] >= 0 && values[index] <= 525600);
+        }
+
+        function validExpandedReminder() {
+          let r = request.resource.data;
+          return r.keys().hasAll([
+              'schemaVersion', 'date', 'endDate', 'timeZone', 'allDay', 'locationType', 'location',
+              'conferenceType', 'conferenceUrl', 'driveUrl', 'guests', 'category', 'notifications',
+              'customMode', 'customDates', 'rangeEnd', 'scheduleVersion', 'scheduleUpdatedAt'
+            ])
+            && r.schemaVersion == 2
+            && r.date is string && r.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && r.endDate is string && r.endDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && r.endDate >= r.date
+            && r.timeZone is string && r.timeZone.size() > 0 && r.timeZone.size() <= 100
+            && r.allDay is bool
+            && r.locationType in ['address', 'online']
+            && r.location is string && r.location.size() <= 500
+            && r.conferenceType in ['', 'meet', 'zoom']
+            && r.conferenceUrl is string && r.conferenceUrl.size() <= 2000
+            && (r.conferenceUrl == '' || r.conferenceUrl.matches('^https://.*'))
+            && r.driveUrl is string && r.driveUrl.size() <= 2000
+            && (r.driveUrl == '' || r.driveUrl.matches('^https://.*'))
+            && r.guests is list && r.guests.size() <= 50
+            && r.category is string && r.category.size() <= 60
+            && r.notifications is list && r.notifications.size() <= 20
+            && validOffset(r.notifications, 0) && validOffset(r.notifications, 1)
+            && validOffset(r.notifications, 2) && validOffset(r.notifications, 3)
+            && validOffset(r.notifications, 4) && validOffset(r.notifications, 5)
+            && validOffset(r.notifications, 6) && validOffset(r.notifications, 7)
+            && validOffset(r.notifications, 8) && validOffset(r.notifications, 9)
+            && validOffset(r.notifications, 10) && validOffset(r.notifications, 11)
+            && validOffset(r.notifications, 12) && validOffset(r.notifications, 13)
+            && validOffset(r.notifications, 14) && validOffset(r.notifications, 15)
+            && validOffset(r.notifications, 16) && validOffset(r.notifications, 17)
+            && validOffset(r.notifications, 18) && validOffset(r.notifications, 19)
+            && r.customMode in ['dates', 'range']
+            && r.customDates is list && r.customDates.size() <= 366
+            && r.rangeEnd is string && r.rangeEnd.size() <= 10
+            && r.scheduleVersion is string && r.scheduleVersion.size() <= 80
+            && r.scheduleUpdatedAt is string && r.scheduleUpdatedAt.size() <= 40;
         }
 
         allow read: if isOwner(userId);

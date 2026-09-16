@@ -3,6 +3,7 @@ const { readFileSync } = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { randomUUID } = require('node:crypto');
 
 const root = process.env.APP_ROOT || path.join(__dirname, '..');
 const source = readFileSync(path.join(root, 'reminder-system.js'), 'utf8');
@@ -28,9 +29,17 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
           if (add) classes.add(value); else classes.delete(value);
         }
       },
+      children: [],
+      addEventListener() {},
+      appendChild(child) { this.children.push(child); child.parent = this; },
       focus() {}, scrollIntoView() {}, reset() {}
     }];
   }));
+  let notificationMarkup = '';
+  Object.defineProperty(elements.get('notificationRows'), 'innerHTML', {
+    get() { return notificationMarkup; },
+    set(value) { notificationMarkup = value; this.children = []; }
+  });
   for (const id of ['signInBtn', 'facebookSignInBtn']) {
     const label = html.match(new RegExp('<button[^>]*id="' + id + '"[^>]*>([\\s\\S]*?)</button>'));
     assert.ok(label, 'The login button exists in the production HTML: ' + id);
@@ -89,13 +98,38 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     async getDoc() { return { exists: () => false }; },
     async setDoc(ref, value) { if (!allowReminderWrites) assert.fail('Signing in should not write a reminder'); calls.writes.push({ ref, value }); },
     async deleteDoc() { assert.fail('Signing in should not delete a reminder'); },
-    serverTimestamp: () => ({})
+    serverTimestamp: () => ({}),
+    getMessaging: () => ({}), isSupported: async () => false,
+    getToken: async () => null, onMessage: () => () => {}
   };
   const context = vm.createContext({
-    console,
+    console, URL, URLSearchParams, crypto: { randomUUID },
     document: {
       getElementById: id => elements.get(id), querySelectorAll: () => [],
-      addEventListener(type, callback) { documentEvents.set(type, callback); }
+      querySelector: () => ({ appendChild() {} }),
+      createElement() {
+        const nodes = new Map();
+        return { dataset: {}, children: [], innerHTML: '', appendChild() {},
+          remove() { this.parent.children = this.parent.children.filter(child => child !== this); },
+          querySelector(selector) {
+            if (!nodes.has(selector)) {
+              let value = '0';
+              if (selector === '.notification-preset' || selector === '.notification-unit') {
+                const name = selector.slice(1);
+                const select = this.innerHTML.match(new RegExp('<select class="' + name + '[^\"]*"[^>]*>([\\s\\S]*?)</select>'));
+                value = select?.[1].match(/<option value="([^\"]+)" selected>/)?.[1] || '0';
+              } else if (selector === '.notification-value') value = this.innerHTML.match(/class="notification-value[^\"]*"[^>]*value="([^\"]+)"/)?.[1] || '0';
+              nodes.set(selector, { value, classList: { toggle() {} } });
+            }
+            return nodes.get(selector);
+          }
+        };
+      },
+      addEventListener(type, callback, options = {}) {
+        const list = documentEvents.get(type) || [];
+        if (options.capture) list.unshift(callback); else list.push(callback);
+        documentEvents.set(type, list);
+      }
     },
     window: {
       addEventListener(type, callback, options = {}) {
@@ -112,12 +146,14 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
       removeItem() { throw new Error('Storage access denied'); }
     },
     setTimeout(callback, delay) { const id = ++timerId; timers.set(id, { callback, at: clock + delay }); return id; },
+    setInterval() { return ++timerId; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: callback => callback()
   });
   // A browser module rejects duplicate declarations; new Function(source) does not.
   const module = new vm.SourceTextModule(source, { context });
   await module.link(specifier => {
+    if (specifier.startsWith('./')) return new vm.SourceTextModule(readFileSync(path.join(root, specifier), 'utf8'), { context });
     assert.match(specifier, /^https:\/\/www\.gstatic\.com\/firebasejs\/[\d.]+\/firebase-[a-z-]+\.js$/);
     const names = Object.keys(firebase);
     return new vm.SyntheticModule(names, function () {
@@ -128,10 +164,12 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
   assert.equal(typeof authListener, 'function', 'Auth state listener is installed');
   await authListener(null);
   return {
-    elements, calls,
+    elements, calls, taskOptions: context.TaskOptions,
     finishCancellations() { deferredCancellations.splice(0).forEach(cancel => cancel()); },
     click: id => elements.get(id).onclick(),
-    documentClick(dataset, extra = {}) { return documentEvents.get('click')({ target: { dataset, checked: false, ...extra } }); },
+    async documentClick(dataset, extra = {}) {
+      for (const callback of documentEvents.get('click') || []) await callback({ target: { dataset, checked: false, ...extra } });
+    },
     dispatch(type) {
       const listeners = events.get(type) || [];
       events.set(type, listeners.filter(listener => !listener.once));
@@ -163,7 +201,7 @@ function assertNoNavigationOrSignout(app) {
 }
 
 test('the HTML loads an ES module that starts both providers and App Check', async () => {
-  assert.match(html, /<script type="module" src="reminder-system\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="reminder-system\.js(?:\?[^\"]+)?"><\/script>/);
   const app = await startApp();
   for (const id of ['signInBtn', 'facebookSignInBtn']) assert.equal(typeof app.elements.get(id).onclick, 'function');
   assert.deepEqual(app.calls.order, ['app', 'app-check', 'auth']);
@@ -445,4 +483,78 @@ test('Edit uses the Firestore document ID when an older stored id field is stale
   assert.deepEqual(app.calls.writes[0].ref, ['users', 'test-user', 'reminders', 'firestore-task-3']);
   assert.equal(app.calls.writes[0].value.id, 'firestore-task-3');
   assert.equal(app.calls.writes[0].value.title, 'Migrated task updated');
+});
+
+async function formApp() {
+  const app = await startApp({ reminderDocs: [{ id: 'expanded', title: 'Team meeting', note: '', labels: [], repeat: 'once', amount: 0, priority: 'medium', next: '2027-01-20T14:00:00Z', startTime: '14:00', endTime: '15:00', done: false }], allowReminderWrites: true });
+  app.click('signInBtn'); await app.succeed(); await app.documentClick({ edit: 'expanded' });
+  return app;
+}
+test('expanded form saves all requested metadata and reloads it for editing', async () => {
+  const app = await formApp(), el = id => app.elements.get(id);
+  for (const [id, value] of Object.entries({ timeZone: 'America/New_York', date: '2027-01-20', endDate: '2027-01-20', startTime: '09:00', endTime: '10:00', location: '123 Main St', locationType: 'address', conferenceType: 'meet', conferenceUrl: 'https://meet.google.com/abc-defg-hij', driveUrl: 'https://drive.google.com/file/d/example', guests: 'person@example.com, other@example.com', category: 'custom', customCategory: 'Community', note: 'Planning notes' })) el(id).value = value;
+  el('notificationRows').children[0].querySelector('.notification-preset').value = '5';
+  app.click('addNotification');
+  el('notificationRows').children[1].querySelector('.notification-preset').value = 'custom';
+  el('notificationRows').children[1].querySelector('.notification-value').value = '2';
+  el('notificationRows').children[1].querySelector('.notification-unit').value = '60';
+  await app.submit();
+  assert.equal(app.calls.writes.length, 1);
+  const r = app.calls.writes[0].value;
+  assert.equal(r.next, '2027-01-20T14:00:00.000Z');
+  assert.equal(r.category, 'Community'); assert.equal(r.location, '123 Main St');
+  assert.equal(r.conferenceType, 'meet'); assert.equal(r.note, 'Planning notes');
+  assert.equal(r.guests.length, 2); assert.deepEqual(Array.from(r.notifications), [120, 5]);
+  assert.ok(r.scheduleVersion); assert.ok(r.scheduleUpdatedAt);
+  await app.documentClick({ edit: 'expanded' });
+  assert.equal(el('timeZone').value, r.timeZone); assert.equal(el('customCategory').value, 'Community');
+  assert.equal(el('notificationRows').children.length, 2);
+  assert.deepEqual(Array.from(app.taskOptions.read().notifications), [120, 5]);
+  assert.match(el('list').innerHTML, /Draft invitation email/);
+});
+test('all-day form disables time inputs and persists inclusive end dates', async () => {
+  const app = await formApp(), el = id => app.elements.get(id);
+  el('allDay').checked = true; el('allDay').onchange();
+  assert.equal(el('startTime').disabled, true); assert.equal(el('endTime').required, false);
+  el('endDate').value = '2027-01-22';
+  await app.submit();
+  assert.equal(app.calls.writes[0].value.allDay, true);
+  assert.equal(app.calls.writes[0].value.endDate, '2027-01-22');
+  assert.equal(app.calls.writes[0].value.startTime, '00:00');
+});
+test('custom-date and range forms produce working schedules', async () => {
+  const app = await formApp(), el = id => app.elements.get(id);
+  el('repeat').value = 'custom'; el('repeat').onchange();
+  assert.equal(el('customRepeatWrap').classList.contains('hidden'), false);
+  el('customDate').value = '2027-01-25'; app.click('addCustomDate');
+  assert.deepEqual(Array.from(app.taskOptions.read().customDates), ['2027-01-20', '2027-01-25']);
+  el('customMode').value = 'range'; el('rangeEnd').value = '2027-01-30'; el('customMode').onchange();
+  assert.equal(app.taskOptions.read().rangeEnd, '2027-01-30');
+  await app.submit(); assert.equal(app.calls.writes[0].value.repeat, 'custom');
+});
+test('removing all notifications saves an empty list rather than restoring defaults', async () => {
+  const app = await formApp();
+  app.elements.get('notificationRows').children[0].querySelector('.remove-notification').onclick();
+  await app.submit();
+  assert.equal(app.calls.writes[0].value.notifications.length, 0);
+  await app.documentClick({ edit: 'expanded' });
+  assert.equal(app.elements.get('notificationRows').children.length, 0);
+});
+test('invalid emails and malicious links show a persistent error without writing', async () => {
+  const app = await formApp();
+  app.elements.get('guests').value = 'not an email'; await app.submit();
+  assert.equal(app.calls.writes.length, 0); assert.match(app.elements.get('formError').textContent, /email/);
+  app.elements.get('guests').value = ''; app.elements.get('conferenceType').value = 'meet';
+  app.elements.get('conferenceUrl').value = 'javascript:alert(1)'; await app.submit();
+  assert.equal(app.calls.writes.length, 0); assert.match(app.elements.get('formError').textContent, /HTTPS/);
+});
+test('title-only edits preserve schedule identity and completed archive timestamps', async () => {
+  const app = await formApp(); await app.submit();
+  const version = app.calls.writes[0].value.scheduleVersion;
+  await app.documentClick({ edit: 'expanded' }); app.elements.get('title').value = 'Renamed'; await app.submit();
+  assert.equal(app.calls.writes[1].value.scheduleVersion, version);
+  await app.documentClick({ done: 'expanded' }, { checked: true });
+  assert.ok(app.calls.writes[2].value.completedAt);
+  await app.documentClick({ edit: 'expanded' }); await app.submit();
+  assert.equal(app.calls.writes[3].value.completedAt, app.calls.writes[2].value.completedAt);
 });

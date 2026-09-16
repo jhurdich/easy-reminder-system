@@ -1,0 +1,19 @@
+.field small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.field .check-label { display: flex; align-items: center; gap: 8px; }
+.field .check-label input { width: auto; }
+.inline-options, .notification-row { display: flex; gap: 8px; align-items: center; margin: 7px 0; }
+.notification-row select { flex: 1; min-width: 0; }
+.notification-row input { width: 92px; }
+.notification-row .notification-unit { max-width: 145px; }
+.notification-fields { border: 1px solid var(--line); border-radius: 8px; margin: 8px 0 0; padding: 12px; min-width: 0; }
+.notification-fields legend { font-weight: 700; padding: 0 6px; }
+.notification-fields > button { align-self: flex-start; }
+.notification-preview { background: var(--soft); padding: 13px; border-radius: 8px; }
+#notificationPreview { white-space: pre-wrap; color: var(--muted); font-size: 12px; }
+.date-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.date-chips button { border: 1px solid var(--line); background: var(--soft); border-radius: 20px; padding: 6px 10px; cursor: pointer; }
+.task-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.task-links a { color: #315a9b; }
+.task-options-meta { margin-top: 7px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.quick-add { scroll-margin-top: 20px; }
+@media (max-width: 560px) { .notification-row { flex-wrap: wrap; } .notification-row > select:first-child { flex-basis: 100%; } .notification-control { position: static; margin: 0 16px 16px; width: auto; } }
