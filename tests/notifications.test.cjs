@@ -7,6 +7,14 @@ const crypto = require('node:crypto');
 const core = require('../functions-correct/task-core.js');
 const source = readFileSync(path.join(__dirname, '../functions-correct/index.js'), 'utf8');
 
+test('deployment pins the supported cloud runtime independently of local tooling', () => {
+  const config = JSON.parse(readFileSync(path.join(__dirname, '../firebase-deploy.json'), 'utf8'));
+  const pkg = JSON.parse(readFileSync(path.join(__dirname, '../functions-correct/package.json'), 'utf8'));
+  assert.equal(config.functions.source, 'functions-correct');
+  assert.equal(config.functions.runtime, 'nodejs22');
+  assert.equal(pkg.engines.node, '>=22');
+});
+
 function scheduler({ enabled = true, tokens = ['token-a', 'token-b'], responder, done = false } = {}) {
   let now = Date.parse('2027-01-20T08:50:00Z');
   const sent = [], errors = [];

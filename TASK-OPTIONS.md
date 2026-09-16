@@ -26,8 +26,10 @@ This repository serves the frontend through GitHub Pages, but GitHub Pages does 
 
    ```sh
    npm --prefix functions-correct install
-   firebase deploy --project easy-reminder-system --config firebase-deploy.json --only firestore:rules,functions:sendDueReminderNotifications
+   npx firebase-tools deploy --project easy-reminder-system --config firebase-deploy.json --only firestore:rules,functions:sendDueReminderNotifications
    ```
+
+   The configuration explicitly deploys `nodejs22`; the package accepts Node.js 22+ for local tooling, including Node.js 24. Keep the `--config firebase-deploy.json` argument: it selects the correct function source and cloud runtime. Node.js 20 is deprecated according to [Google's runtime schedule](https://docs.cloud.google.com/run/docs/runtimes/function-runtimes).
 
    Confirm the scheduled function exists and the `reminders` collection-group query succeeds. Configure an index if Firebase asks for one. This can require a billing-enabled Firebase project and authorized deployment access. No deployment, billing change, or credential setup was performed by this change.
 
@@ -50,7 +52,7 @@ This repository serves the frontend through GitHub Pages, but GitHub Pages does 
 
 ## Automated checks
 
-From the repository root (Node.js 20+):
+From the repository root (Node.js 22+):
 
 ```sh
 node --input-type=module --check < reminder-system.js

@@ -3,6 +3,7 @@
     "rules": "firestore.rules"
   },
   "functions": {
-    "source": "functions-correct"
+    "source": "functions-correct",
+    "runtime": "nodejs22"
   }
 }
