@@ -30,13 +30,13 @@
 </div>
 <section class="page-head"><div><h1 id="pageTitle" tabindex="-1">Inbox</h1><p id="pageSubtitle">Your active reminders in one place.</p></div><button id="headAdd" class="primary save">Add task</button></section><section id="quickAdd" class="quick-add panel content hidden"><h2 id="formTitle">Add a task</h2><form id="form">
   <div class="form-grid">
-    <div class="field full"><label for="title">Task</label><input id="title" required maxlength="200" autocomplete="off" placeholder="What do you need to do?"></div>
+    <div class="field full"><label for="title">Task</label><input id="title" maxlength="200" autocomplete="off" placeholder="What do you need to do?"></div>
     <div class="field full"><label class="check-label" for="allDay"><input id="allDay" type="checkbox"> All day</label></div>
-    <div class="field"><label for="date">Start date</label><input id="date" type="date" required></div>
-    <div class="field time-field"><label for="startTime">Starting time</label><input id="startTime" type="time" required></div>
-    <div class="field"><label for="endDate">End date</label><input id="endDate" type="date" required></div>
-    <div class="field time-field"><label for="endTime">Ending time</label><input id="endTime" type="time" required></div>
-    <div class="field"><label for="timeZone">Time zone</label><select id="timeZone" required aria-describedby="timeZoneHint"><option value="UTC">UTC — Coordinated Universal Time</option></select><small id="timeZoneHint">Choose a time zone. New tasks default to this device's time zone.</small></div>
+    <div class="field"><label for="date">Start date</label><input id="date" type="date"></div>
+    <div class="field time-field"><label for="startTime">Starting time</label><input id="startTime" type="time"></div>
+    <div class="field"><label for="endDate">End date</label><input id="endDate" type="date"></div>
+    <div class="field time-field"><label for="endTime">Ending time</label><input id="endTime" type="time"></div>
+    <div class="field"><label for="timeZone">Time zone</label><select id="timeZone" aria-describedby="timeZoneHint"><option value="UTC">UTC — Coordinated Universal Time</option></select><small id="timeZoneHint">Choose a time zone. New tasks default to this device's time zone.</small></div>
     <div class="field"><label for="repeat">Repeat</label><select id="repeat">
       <option value="once">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="annually">Annually</option><option value="custom">Custom dates or range</option><option value="minutes">Every X minutes</option><option value="hours">Every X hours</option><option value="days">Every X days</option><option value="weeks">Every X weeks</option>
     </select></div>
@@ -52,7 +52,7 @@
     <div class="field"><label for="category">Category</label><select id="category"><option value="">No category</option></select></div>
     <div class="field hidden" id="customCategoryWrap"><label for="customCategory">Custom category</label><input id="customCategory" maxlength="60" placeholder="Type a category"></div>
     <div class="field"><label for="locationType">Where</label><select id="locationType"><option value="address">In person / address</option><option value="online">Online</option></select></div>
-    <div class="field full" id="addressWrap"><label for="location">Location / address</label><input id="location" maxlength="500" autocomplete="street-address" placeholder="Venue or full address"></div>
+    <div class="field full" id="addressWrap"><label for="location">Location / address</label><input id="location" maxlength="500" autocomplete="street-address" placeholder="Venue or full address"><div id="mapLinks" class="map-links hidden" style="display:flex;gap:8px;flex-wrap:wrap"><a id="googleMapsLink" class="cancel" target="_blank" rel="noopener noreferrer">Open in Google Maps</a><a id="appleMapsLink" class="cancel" target="_blank" rel="noopener noreferrer">Open in Apple Maps</a></div></div>
     <div class="field"><label for="conferenceType">Video conferencing</label><select id="conferenceType"><option value="">None</option><option value="meet">Google Meet</option><option value="zoom">Zoom</option></select></div>
     <div class="field full hidden" id="conferenceWrap"><label for="conferenceUrl">Meeting link</label><input id="conferenceUrl" type="url" maxlength="2000" placeholder="https://meet.google.com/..."><small>Paste an existing Meet or Zoom link. This does not create a new meeting.</small></div>
     <div class="field full"><label for="note">Description</label><textarea id="note" maxlength="2000" placeholder="Details or instructions"></textarea></div>
