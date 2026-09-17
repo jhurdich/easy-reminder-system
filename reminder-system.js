@@ -1,5 +1,5 @@
 import "./functions-correct/task-core.js";
-import "./task-options.js?v=2026-09-17-time-zones";
+import "./task-options.js?v=2026-09-17-save-address";
 import "./search-ui.js?v=2026-09-17-search-theme";
 import "./calendar-view.js?v=2026-09-17-calendar";
 const TaskCore=globalThis.TaskCore,TaskOptions=globalThis.TaskOptions;
@@ -383,8 +383,8 @@ $("form").onsubmit=async e=>{
   let reminder;
   try{
     const options=TaskOptions.read();
-    const title=$("title").value.trim()||"Untitled task",note=$("note").value.trim(),labels=$("labels").value.split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
-    if(title.length>200||note.length>2000||labels.length>20||labels.some(x=>x.length>50))throw new Error("Please shorten the task, description, or labels. Use up to 20 labels.");
+    const title=$("title").value.trim(),note=$("note").value.trim(),labels=$("labels").value.split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
+    if(!title||title.length>200||note.length>2000||labels.length>20||labels.some(x=>x.length>50))throw new Error("Please shorten the task, description, or labels. Use up to 20 labels.");
     const scheduleFields=["next","endDate","allDay","timeZone","repeat","amount","customMode","customDates","rangeEnd","notifications"];
     const changed=!existing||scheduleFields.some(k=>JSON.stringify(existing[k])!==JSON.stringify(options[k]));
     reminder={...(existing||{}),...options,id:existing?existing.id:crypto.randomUUID(),title,note,labels,priority:$("priority").value,done:existing?existing.done:false,
