@@ -67,11 +67,11 @@
     $('notificationRows').appendChild(row);
   }
   function renderDates() {
-    $('customDates').innerHTML = selectedDates.map(date => `<button type="button" data-remove-date="${date}" aria-label="Remove ${date}">${date} ×</button>`).join('');
+    $('customDates').innerHTML = selectedDates.map(date => `<span class="date-chip"><button type="button" class="date-chip-value" data-select-date="${date}" aria-label="Edit custom date ${date}">${date}</button><button type="button" class="date-chip-remove" data-remove-date="${date}" aria-label="Remove ${date}">×</button></span>`).join('');
   }
   function sync() {
     const allDay = $('allDay').checked;
-    for (const id of ['startTime', 'endTime']) { $(id).disabled = allDay; $(id).required = !allDay; }
+    for (const id of ['startTime', 'endTime']) { $(id).disabled = allDay; $(id).required = false; }
     document.querySelectorAll('.time-field').forEach(el => el.classList.toggle('hidden', allDay));
     const legacy = ['minutes', 'hours', 'days', 'weeks'].includes($('repeat').value);
     $('amountWrap').style.display = legacy ? 'flex' : 'none';
@@ -83,15 +83,16 @@
     $('customDate').disabled = $('repeat').value !== 'custom' || $('customMode').value !== 'dates';
     $('rangeEnd').disabled = $('repeat').value !== 'custom' || $('customMode').value !== 'range';
     $('customCategoryWrap').classList.toggle('hidden', $('category').value !== 'custom');
-    $('customCategory').required = $('category').value === 'custom';
+    $('customCategory').required = false;
     $('addressWrap').classList.toggle('hidden', $('locationType').value === 'online');
     $('conferenceWrap').classList.toggle('hidden', !$('conferenceType').value);
-    $('conferenceUrl').required = Boolean($('conferenceType').value);
+    $('conferenceUrl').required = false;
     $('conferenceUrl').disabled = !$('conferenceType').value;
     $('conferenceUrl').placeholder = $('conferenceType').value === 'zoom' ? 'https://zoom.us/j/...' : 'https://meet.google.com/...';
     $('endDate').min = $('date').value;
     $('customDate').min = $('date').value;
     $('rangeEnd').min = $('date').value;
+    syncMapLinks();
     preview();
   }
   function read() {
@@ -104,21 +105,28 @@
     });
     const category = $('category').value === 'custom' ? $('customCategory').value.trim() : $('category').value;
     if ($('category').value === 'custom' && !category) throw new Error('Type a custom category.');
-    const timeZone = $('timeZone').value.trim();
-    if (!timeZone) throw new Error('Choose a time zone.');
+    const timeZone = $('timeZone').value.trim() || deviceZone();
+    const date = $('date').value || C.parts(Date.now(), timeZone).date;
     const task = {
-      schemaVersion: 2, date: $('date').value, endDate: $('endDate').value || $('date').value,
+      schemaVersion: 2, date, endDate: $('endDate').value || date,
       timeZone: C.zone(timeZone), allDay: $('allDay').checked,
-      startTime: $('allDay').checked ? '00:00' : $('startTime').value, endTime: $('allDay').checked ? '00:00' : $('endTime').value,
+      startTime: $('allDay').checked ? '00:00' : ($('startTime').value || '09:00'), endTime: $('allDay').checked ? '00:00' : ($('endTime').value || '10:00'),
       repeat: $('repeat').value, amount: $('repeat').value === 'once' ? 0 : ['minutes', 'hours', 'days', 'weeks'].includes($('repeat').value) ? Number($('amount').value) : 1,
-      customMode: $('customMode').value, customDates: [...new Set([$('date').value, ...selectedDates])].sort(), rangeEnd: $('rangeEnd').value,
+      customMode: $('customMode').value || 'dates', customDates: [...new Set([date, ...selectedDates])].sort(), rangeEnd: $('rangeEnd').value,
       locationType: $('locationType').value, location: $('locationType').value === 'online' ? '' : $('location').value.trim(),
-      conferenceType: $('conferenceType').value, conferenceUrl: $('conferenceType').value ? C.safeLink($('conferenceUrl').value.trim(), $('conferenceType').value) : '',
+      conferenceType: $('conferenceUrl').value.trim() ? $('conferenceType').value : '', conferenceUrl: $('conferenceType').value && $('conferenceUrl').value.trim() ? C.safeLink($('conferenceUrl').value.trim(), $('conferenceType').value) : '',
       driveUrl: C.safeLink($('driveUrl').value.trim(), 'drive'), guests: C.parseGuests($('guests').value), category, notifications: C.offsets({ notifications })
     };
-    if (task.conferenceType && !task.conferenceUrl) throw new Error('Paste the meeting link, or choose None for video conferencing.');
     task.next = C.validate(task);
     return task;
+  }
+  function syncMapLinks() {
+    const wrap = $('mapLinks'), location = $('location').value.trim();
+    if (!wrap) return;
+    const encoded = encodeURIComponent(location);
+    const google = $('googleMapsLink'), apple = $('appleMapsLink');
+    wrap.classList.toggle('hidden', !location || $('locationType').value === 'online');
+    if (location) { google.href = `https://www.google.com/maps/search/?api=1&query=${encoded}`; apple.href = `http://maps.apple.com/?address=${encoded}`; }
   }
   function preview() {
     try { $('notificationPreview').textContent = C.summary({ ...read(), title: $('title').value.trim() || 'Your task' }); }
@@ -148,6 +156,7 @@
     for (const id of ['allDay', 'repeat', 'category', 'customMode', 'locationType', 'conferenceType']) $(id).onchange = sync;
     $('date').onchange = () => { if ($('endDate').value < $('date').value) $('endDate').value = $('date').value; sync(); };
     $('form').addEventListener('input', preview);
+    $('location').addEventListener('input', syncMapLinks);
     $('addNotification').onclick = () => addNotification();
     $('addCustomDate').onclick = () => {
       const date = $('customDate').value;
@@ -155,7 +164,7 @@
       if (selectedDates.length >= 365 && !selectedDates.includes(date)) { error('Choose up to 366 dates including the start date.'); return; }
       selectedDates = [...new Set([...selectedDates, date])].sort(); $('customDate').value = ''; renderDates(); error();
     };
-    $('customDates').onclick = event => { const date = event.target.dataset.removeDate; if (date) { selectedDates = selectedDates.filter(d => d !== date); renderDates(); } };
+    $('customDates').onclick = event => { const removeDate = event.target.dataset.removeDate; const selectDate = event.target.dataset.selectDate; if (removeDate) { selectedDates = selectedDates.filter(d => d !== removeDate); renderDates(); } else if (selectDate) { $('customDate').value = selectDate; $('customDate').focus(); } };
     fill();
   }
   function taskDetails(task) {
