@@ -1,5 +1,5 @@
 import "./functions-correct/task-core.js";
-import "./task-options.js";
+import "./task-options.js?v=2026-09-17-time-zones";
 const TaskCore=globalThis.TaskCore,TaskOptions=globalThis.TaskOptions;
 import{initializeApp}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import{initializeAppCheck,ReCaptchaEnterpriseProvider}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";

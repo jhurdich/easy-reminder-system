@@ -4,6 +4,47 @@
   const C = root.TaskCore, $ = id => document.getElementById(id);
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const presets = [[0, 'At start time'], [5, '5 minutes before'], [10, '10 minutes before'], [15, '15 minutes before'], [30, '30 minutes before'], [60, '1 hour before'], [1440, '1 day before']];
+  const commonZones = new Map([
+    ['America/New_York', 'Eastern Time — New York'], ['America/Chicago', 'Central Time — Chicago'],
+    ['America/Denver', 'Mountain Time — Denver'], ['America/Los_Angeles', 'Pacific Time — Los Angeles'],
+    ['America/Phoenix', 'Arizona — Phoenix'], ['America/Anchorage', 'Alaska — Anchorage'],
+    ['Pacific/Honolulu', 'Hawaii — Honolulu'], ['UTC', 'UTC — Coordinated Universal Time'],
+    ['America/Toronto', 'Toronto'], ['America/Vancouver', 'Vancouver'],
+    ['America/Halifax', 'Atlantic Time — Halifax'], ['America/St_Johns', 'Newfoundland — St. John’s'],
+    ['America/Mexico_City', 'Mexico City'], ['America/Sao_Paulo', 'São Paulo'],
+    ['Europe/London', 'London'], ['Europe/Paris', 'Paris'], ['Europe/Berlin', 'Berlin'],
+    ['Africa/Johannesburg', 'Johannesburg'], ['Africa/Cairo', 'Cairo'],
+    ['Asia/Jerusalem', 'Jerusalem'], ['Asia/Dubai', 'Dubai'], ['Asia/Kolkata', 'India — Kolkata'],
+    ['Asia/Kathmandu', 'Nepal — Kathmandu'], ['Asia/Singapore', 'Singapore'],
+    ['Asia/Shanghai', 'China — Shanghai'], ['Asia/Tokyo', 'Japan — Tokyo'],
+    ['Australia/Perth', 'Perth'], ['Australia/Adelaide', 'Adelaide'], ['Australia/Sydney', 'Sydney'],
+    ['Pacific/Auckland', 'Auckland']
+  ]);
+  let availableZones = [];
+  function deviceZone() { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; }
+  function renderTimeZones() {
+    const local = deviceZone();
+    $('timeZone').innerHTML = availableZones.map(zone => {
+      const label = commonZones.get(zone) || zone.replace(/_/g, ' ');
+      return `<option value="${escape(zone)}">${escape((zone === local ? 'This device — ' : '') + label)}</option>`;
+    }).join('');
+  }
+  function initTimeZones() {
+    let supported = [];
+    // Older browsers may omit this API or throw for the timeZone key.
+    try { if (typeof Intl.supportedValuesOf === 'function') supported = Intl.supportedValuesOf('timeZone'); } catch (_) {}
+    availableZones = [...new Set([deviceZone(), ...commonZones.keys(), ...supported])].filter(value => {
+      if (typeof value !== 'string' || !value) return false;
+      try { C.zone(value); return true; } catch (_) { return false; }
+    });
+    renderTimeZones();
+  }
+  function selectTimeZone(value) {
+    // Saved aliases need their own option; assigning a missing select value would clear it.
+    const zone = C.zone(value);
+    if (!availableZones.includes(zone)) { availableZones.push(zone); renderTimeZones(); }
+    $('timeZone').value = zone;
+  }
   let selectedDates = [];
   function error(message = '') { $('formError').textContent = message; }
   function addNotification(minutes = 10) {
@@ -63,9 +104,11 @@
     });
     const category = $('category').value === 'custom' ? $('customCategory').value.trim() : $('category').value;
     if ($('category').value === 'custom' && !category) throw new Error('Type a custom category.');
+    const timeZone = $('timeZone').value.trim();
+    if (!timeZone) throw new Error('Choose a time zone.');
     const task = {
       schemaVersion: 2, date: $('date').value, endDate: $('endDate').value || $('date').value,
-      timeZone: C.zone($('timeZone').value.trim()), allDay: $('allDay').checked,
+      timeZone: C.zone(timeZone), allDay: $('allDay').checked,
       startTime: $('allDay').checked ? '00:00' : $('startTime').value, endTime: $('allDay').checked ? '00:00' : $('endTime').value,
       repeat: $('repeat').value, amount: $('repeat').value === 'once' ? 0 : ['minutes', 'hours', 'days', 'weeks'].includes($('repeat').value) ? Number($('amount').value) : 1,
       customMode: $('customMode').value, customDates: [...new Set([$('date').value, ...selectedDates])].sort(), rangeEnd: $('rangeEnd').value,
@@ -82,9 +125,10 @@
     catch (_) { $('notificationPreview').textContent = 'Add the task, location, and valid dates/times to preview its summary.'; }
   }
   function fill(task = null) {
-    const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const localZone = deviceZone();
     const r = task ? C.normalize(task, localZone) : { timeZone: localZone, date: C.parts(Date.now(), localZone).date, allDay: false, locationType: 'address', notifications: [0], customDates: [], customMode: 'dates' };
-    for (const id of ['timeZone', 'endDate', 'locationType', 'location', 'conferenceType', 'conferenceUrl', 'driveUrl', 'customMode', 'rangeEnd']) $(id).value = r[id] || (id === 'endDate' ? r.date : '');
+    selectTimeZone(r.timeZone);
+    for (const id of ['endDate', 'locationType', 'location', 'conferenceType', 'conferenceUrl', 'driveUrl', 'customMode', 'rangeEnd']) $(id).value = r[id] || (id === 'endDate' ? r.date : '');
     $('date').value = r.date;
     $('allDay').checked = Boolean(r.allDay);
     $('guests').value = (r.guests || []).join(', ');
@@ -99,8 +143,8 @@
   }
   function init() {
     $('category').innerHTML = '<option value="">No category</option>' + C.categories.map(c => `<option value="${escape(c)}">${escape(c)}</option>`).join('') + '<option value="custom">Custom…</option>';
-    const zones = [...new Set(['UTC', Intl.DateTimeFormat().resolvedOptions().timeZone, ...(Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : ['America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles', 'Europe/London', 'Asia/Tokyo'])])];
-    $('timeZones').innerHTML = zones.map(z => `<option value="${escape(z)}"></option>`).join('');
+    initTimeZones();
+    $('timeZone').onchange = preview;
     for (const id of ['allDay', 'repeat', 'category', 'customMode', 'locationType', 'conferenceType']) $(id).onchange = sync;
     $('date').onchange = () => { if ($('endDate').value < $('date').value) $('endDate').value = $('date').value; sync(); };
     $('form').addEventListener('input', preview);

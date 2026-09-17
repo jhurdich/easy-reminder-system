@@ -13,7 +13,8 @@ const html = readFileSync(path.join(root, 'reminder-system.html'), 'utf8');
 // No network requests, real credentials, or production reminder data are used.
 async function startApp({ deferCancellation = false, reminderDocs = [], allowReminderWrites = false,
   nowMs = Date.now(), storage = new Map(), storageBlocked = false, nativeSupported = true,
-  notificationPermission = 'granted', permissionRequest, notificationThrows = false } = {}) {
+  notificationPermission = 'granted', permissionRequest, notificationThrows = false,
+  supportedTimeZones = Intl.supportedValuesOf?.bind(Intl) } = {}) {
   const events = new Map();
   const documentEvents = new Map();
   const timers = new Map();
@@ -39,6 +40,15 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     }];
   }));
   let notificationMarkup = '';
+  // A native select cannot hold a value without a matching option.
+  let selectedTimeZone = '';
+  Object.defineProperty(elements.get('timeZone'), 'value', {
+    get() { return selectedTimeZone; },
+    set(value) {
+      const values = [...this.innerHTML.matchAll(/<option value="([^"]+)"/g)].map(match => match[1]);
+      selectedTimeZone = values.includes(value) ? value : '';
+    }
+  });
   Object.defineProperty(elements.get('notificationRows'), 'innerHTML', {
     get() { return notificationMarkup; },
     set(value) { notificationMarkup = value; this.children = []; }
@@ -122,6 +132,7 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
   };
   const context = vm.createContext({
     console, URL, URLSearchParams, crypto: { randomUUID },
+    Intl: { DateTimeFormat: Intl.DateTimeFormat, supportedValuesOf: supportedTimeZones },
     Date: class extends Date {
       constructor(...args) { super(...(args.length ? args : [nowMs + clock])); }
       static now() { return nowMs + clock; }
@@ -182,7 +193,7 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
   // A browser module rejects duplicate declarations; new Function(source) does not.
   const module = new vm.SourceTextModule(source, { context });
   await module.link(specifier => {
-    if (specifier.startsWith('./')) return new vm.SourceTextModule(readFileSync(path.join(root, specifier), 'utf8'), { context });
+    if (specifier.startsWith('./')) return new vm.SourceTextModule(readFileSync(path.join(root, specifier.split('?')[0]), 'utf8'), { context });
     assert.match(specifier, /^https:\/\/www\.gstatic\.com\/firebasejs\/[\d.]+\/firebase-[a-z-]+\.js$/);
     const names = Object.keys(firebase);
     return new vm.SyntheticModule(names, function () {
@@ -724,6 +735,53 @@ async function formApp() {
   app.click('signInBtn'); await app.succeed(); await app.documentClick({ edit: 'expanded' });
   return app;
 }
+test('time zone is a populated dropdown with friendly choices and the device default', async () => {
+  assert.match(html, /<select\b[^>]*id="timeZone"[^>]*required/);
+  const app = await startApp(), select = app.elements.get('timeZone');
+  const values = [...select.innerHTML.matchAll(/<option value="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(select.value, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  assert.match(select.innerHTML, /This device — /);
+  for (const label of ['Eastern Time', 'Central Time', 'Mountain Time', 'Pacific Time', 'Coordinated Universal Time']) assert.ok(select.innerHTML.includes(label));
+  for (const zone of Intl.supportedValuesOf('timeZone')) assert.ok(values.includes(zone), zone);
+  assert.equal(new Set(values).size, values.length);
+});
+for (const [name, supportedTimeZones] of [['missing', null], ['throwing', () => { throw new RangeError('Unsupported key'); }]]) {
+  test(`time-zone choices remain available with a ${name} enumeration API`, async () => {
+    const app = await startApp({ supportedTimeZones }), select = app.elements.get('timeZone');
+    for (const zone of ['America/New_York', 'America/Los_Angeles', 'Europe/London', 'Asia/Tokyo', 'UTC']) {
+      select.value = zone;
+      assert.equal(select.value, zone);
+    }
+    assert.ok(typeof app.elements.get('signInBtn').onclick === 'function');
+  });
+}
+test('editing and saving retains a saved time-zone alias outside the dropdown list', async () => {
+  const original = pageReminder({ timeZone: 'US/Eastern', next: '2027-01-20T14:00:00.000Z' });
+  const app = await startApp({ reminderDocs: [original], allowReminderWrites: true, supportedTimeZones: () => [] });
+  await app.setUser('test-user');
+  await app.documentClick({ edit: original.id });
+  assert.equal(app.elements.get('timeZone').value, 'US/Eastern');
+  await app.submit();
+  assert.equal(app.calls.writes.length, 1);
+  assert.equal(app.calls.writes[0].value.timeZone, 'US/Eastern');
+  assert.equal(app.calls.writes[0].value.next, original.next);
+});
+test('changing the dropdown updates the summary and schedules in the selected zone', async () => {
+  const app = await formApp(), el = id => app.elements.get(id);
+  el('startTime').value = '09:00'; el('endTime').value = '10:00';
+  el('timeZone').value = 'America/Chicago'; el('timeZone').onchange();
+  assert.match(el('notificationPreview').textContent, /America\/Chicago/);
+  await app.submit();
+  assert.equal(app.calls.writes[0].value.timeZone, 'America/Chicago');
+  assert.equal(app.calls.writes[0].value.next, '2027-01-20T15:00:00.000Z');
+});
+test('an empty time-zone selection is rejected without silently scheduling in UTC', async () => {
+  const app = await formApp();
+  app.elements.get('timeZone').value = '';
+  await app.submit();
+  assert.equal(app.calls.writes.length, 0);
+  assert.match(app.elements.get('formError').textContent, /Choose a time zone/);
+});
 test('expanded form saves all requested metadata and reloads it for editing', async () => {
   const app = await formApp(), el = id => app.elements.get(id);
   for (const [id, value] of Object.entries({ timeZone: 'America/New_York', date: '2027-01-20', endDate: '2027-01-20', startTime: '09:00', endTime: '10:00', location: '123 Main St', locationType: 'address', conferenceType: 'meet', conferenceUrl: 'https://meet.google.com/abc-defg-hij', driveUrl: 'https://drive.google.com/file/d/example', guests: 'person@example.com, other@example.com', category: 'custom', customCategory: 'Community', note: 'Planning notes' })) el(id).value = value;
