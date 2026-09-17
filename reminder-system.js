@@ -1,5 +1,6 @@
 import "./functions-correct/task-core.js";
 import "./task-options.js?v=2026-09-17-time-zones";
+import "./search-ui.js?v=2026-09-17-search-theme";
 const TaskCore=globalThis.TaskCore,TaskOptions=globalThis.TaskOptions;
 import{initializeApp}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import{initializeAppCheck,ReCaptchaEnterpriseProvider}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";
@@ -15,6 +16,7 @@ const notifiedOccurrences=new Map();
 let notificationAttempt=0,notificationPending=false,nativeNotificationsFailed=false,notificationStorageAvailable=true;
 let recentAlerts=[];
 let authGeneration=0;
+let searchUi=null;
 const openNotifications=new Set();
 const IDLE_LIMIT=60000,IDLE_GRACE=30000,now=new Date(),units={once:"one time",minutes:"minute(s)",hours:"hour(s)",days:"day(s)",weeks:"week(s)"};
 $("date").value=now.toISOString().slice(0,10);
@@ -169,21 +171,26 @@ function calendarOccurrence(r){
   return {...normalized,next:new Date(next).toISOString(),date,endDate:TaskCore.addDays(date,TaskCore.dayDiff(normalized.endDate,normalized.date))};
 }
 function cal(r){return TaskCore.calendarUrl(calendarOccurrence(r))}
-function filtered(){let q=query.toLowerCase().trim(),today=key(new Date());
-return reminders.filter(r=>{let text=(r.title+" "+(r.note||"")+" "+(r.location||"")+" "+(r.category||"")+" "+(r.labels||[]).join(" ")).toLowerCase(),d=displayStart(r)===null?"":key(displayStart(r)),match=!q||text.includes(q),lab=!labelFilter||((r.labels||[]).includes(labelFilter)||r.category===labelFilter),prio=!priorityFilter||(r.priority||"medium")===priorityFilter,v=view==="inbox"?!r.done:view==="today"?!r.done&&d===today:view==="upcoming"?!r.done&&d>today:view==="filters"?!r.done&&lab&&prio:true;
-return match&&v}).sort((x,y)=>(displayStart(x)??Infinity)-(displayStart(y)??Infinity))}
+function filtered(){const today=key(new Date());
+return reminders.filter(r=>{
+  if(query.trim())return TaskSearch.matchesTask(r,query);
+  const start=displayStart(r),d=start===null?"":key(start),lab=!labelFilter||((r.labels||[]).includes(labelFilter)||r.category===labelFilter),prio=!priorityFilter||(r.priority||"medium")===priorityFilter;
+  return view==="inbox"?!r.done:view==="today"?!r.done&&d===today:view==="upcoming"?!r.done&&d>today:view==="filters"?!r.done&&lab&&prio:view==="archived"?r.done:true;
+}).sort((x,y)=>(displayStart(x)??Infinity)-(displayStart(y)??Infinity))}
 function render(){
-  let titles={inbox:["Inbox","Your active reminders in one place."],today:["Today","Tasks due today."],upcoming:["Upcoming","See what is coming next."],filters:["Filters & Labels","Filter active tasks by label."],reporting:["Reporting","A simple view of your progress."]};
+  let titles={inbox:["Inbox","Your active reminders in one place."],today:["Today","Tasks due today."],upcoming:["Upcoming","See what is coming next."],filters:["Filters & Labels","Filter active tasks by label."],reporting:["Reporting","A simple view of your progress."],archived:["Archived","Completed tasks are kept here for 30 days. Uncheck one to reopen it."]};
+  const searching=Boolean(query.trim());
 
-  $("pageTitle").textContent=titles[view][0];
+  $("pageTitle").textContent=searching?"Search results":titles[view][0];
 
-  $("pageSubtitle").textContent=titles[view][1];
+  $("pageSubtitle").textContent=searching?'All tasks matching “'+query.trim()+'”, including archived tasks.':titles[view][1];
 
-  $("reporting").classList.toggle("hidden",view!=="reporting");
+  $("reporting").classList.toggle("hidden",searching||view!=="reporting");
 
-  $("taskSection").classList.toggle("hidden",view==="reporting");
+  $("taskSection").classList.toggle("hidden",!searching&&view==="reporting");
 
-  $("listHeading").textContent=priorityFilter?priorityName(priorityFilter):labelFilter?"# "+labelFilter:"Tasks";
+  $("listHeading").textContent=searching?"Matching tasks":view==="archived"?"Archived tasks":priorityFilter?priorityName(priorityFilter):labelFilter?"# "+labelFilter:"Tasks";
+  document.querySelectorAll('[data-view]').forEach(button=>button.classList.toggle('active',!searching&&button.dataset.view===view));
 
   let ls=[...new Set(reminders.flatMap(r=>[...(r.labels||[]),...(r.category?[r.category]:[])]))].sort();
 
@@ -208,9 +215,11 @@ function render(){
   let data=filtered();
 
   $("empty").style.display=data.length?"none":"block";
+  $("empty").textContent=searching?'No tasks match your search. Check the suggestions above for app actions.':"No tasks here.";
 
-  $("list").innerHTML=data.map(r=>'<article class="task"><input class="task-check" type="checkbox" data-done="'+esc(r.id)+'" '+(r.done?"checked":"")+' aria-label="Complete '+esc(r.title)+'"><div class="task-body"><div class="task-title '+(r.done?"done":"")+'">'+esc(r.title)+'</div>'+(r.note?'<div class="task-note">'+esc(r.note)+'</div>':'')+'<div class="task-meta"><span class="chip due">'+esc(startLabel(r))+'</span><span class="chip end">'+esc(endLabel(r))+'</span><span class="chip priority-'+(r.priority||"medium")+'">'+esc(priorityName(r.priority||"medium"))+'</span>'+(r.repeat!=="once"?'<span class="chip repeat">↻ '+esc(TaskCore.repeatLabel(r))+'</span>':"")+(r.labels||[]).map(l=>'<span class="chip label">#'+esc(l)+'</span>').join("")+'</div>'+TaskOptions.taskDetails(r)+'</div><div class="task-actions"><button data-edit="'+esc(r.id)+'">Edit</button>'+(!r.done?'<button data-calendar="'+esc(r.id)+'">Google Calendar draft</button>'+(r.guests?.length?'<button data-invite="'+esc(r.id)+'">Draft invitation email</button>':'')+'<button data-snooze="'+esc(r.id)+'">Snooze 10m</button>':"")+'<button class="danger" data-delete="'+esc(r.id)+'">Delete</button></div></article>').join("");
+  $("list").innerHTML=data.map(r=>'<article class="task"><input class="task-check" type="checkbox" data-done="'+esc(r.id)+'" '+(r.done?"checked":"")+' aria-label="'+(r.done?"Reopen ":"Complete ")+esc(r.title)+'"><div class="task-body"><div class="task-title '+(r.done?"done":"")+'">'+esc(r.title)+'</div>'+(r.note?'<div class="task-note">'+esc(r.note)+'</div>':'')+'<div class="task-meta"><span class="chip due">'+esc(r.done?'Completed '+archiveStamp(r):startLabel(r))+'</span><span class="chip end">'+esc(endLabel(r))+'</span><span class="chip priority-'+(r.priority||"medium")+'">'+esc(priorityName(r.priority||"medium"))+'</span>'+(r.repeat!=="once"?'<span class="chip repeat">↻ '+esc(TaskCore.repeatLabel(r))+'</span>':"")+(r.labels||[]).map(l=>'<span class="chip label">#'+esc(l)+'</span>').join("")+'</div>'+TaskOptions.taskDetails(r)+'</div><div class="task-actions"><button data-edit="'+esc(r.id)+'">Edit</button>'+(!r.done?'<button data-calendar="'+esc(r.id)+'">Google Calendar draft</button>'+(r.guests?.length?'<button data-invite="'+esc(r.id)+'">Draft invitation email</button>':'')+'<button data-snooze="'+esc(r.id)+'">Snooze 10m</button>':"")+'<button class="danger" data-delete="'+esc(r.id)+'">Delete</button></div></article>').join("");
 
+  searchUi?.refresh(true);
 }
 async function load(){
   const uid=user.uid,generation=authGeneration;
@@ -341,24 +350,20 @@ $("signInBtn").onclick = () =>
 if($("notificationBtn"))$("notificationBtn").onclick=toggleNotifications;
 
 $("signOutBtn").onclick=()=>signOut(auth);
-$("search").oninput=e=>{query=e.target.value;
-render()};
 $("sidebarAdd").onclick=add;
 $("headAdd").onclick=add;
 $("cancelAdd").onclick=()=>{resetTaskForm();
 $("quickAdd").classList.add("hidden")};
-document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>{view=b.dataset.view;
-labelFilter="";
-priorityFilter="";
-document.querySelectorAll("[data-view]").forEach(x=>x.classList.toggle("active",x===b));
-render()});
+function clearSearch(){query="";searchUi?.reset()}
+function changeView(next){clearSearch();view=next;labelFilter="";priorityFilter="";render()}
+document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>changeView(b.dataset.view));
 $("labelList").onclick=e=>{let b=e.target.closest("[data-label]");
-if(b){view="filters";
+if(b){clearSearch();view="filters";
 labelFilter=b.dataset.label;
 priorityFilter="";
 render()}};
 $("priorityList").onclick=e=>{let b=e.target.closest("[data-priority]");
-if(b){view="filters";
+if(b){clearSearch();view="filters";
 labelFilter="";
 priorityFilter=b.dataset.priority;
 render()}};
@@ -393,7 +398,7 @@ $("form").onsubmit=async e=>{
 
 document.addEventListener("click",async e=>{
   const target=e.target;
-  if(target.dataset.priority){view="filters";labelFilter="";priorityFilter=target.dataset.priority;render();return;}
+  if(target.dataset.priority){clearSearch();view="filters";labelFilter="";priorityFilter=target.dataset.priority;render();return;}
   const id=target.dataset.edit||target.dataset.invite||target.dataset.calendar||target.dataset.snooze||target.dataset.delete||target.dataset.done;
   const original=reminders.find(x=>x.id===id);
   if(!original)return;
@@ -428,7 +433,7 @@ onAuthStateChanged(auth,async u=>{user=u;
 const generation=++authGeneration;
 if(idleTimer)clearTimeout(idleTimer);idleTimer=null;hideIdleWarning();
 notificationAttempt++;notificationPending=false;notificationsEnabled=false;nativeNotificationsFailed=false;
-notifiedOccurrences.clear();reminders=[];clearPageAlerts();
+notifiedOccurrences.clear();reminders=[];clearPageAlerts();clearSearch();
 $("list").innerHTML="";
 $("keepReminderSession").checked=false;
 if(u){$("loginGate").classList.add("hidden");
@@ -451,10 +456,42 @@ updateNotificationUi()}resetIdleTimer()});
 const archiveExpiryMs=30*24*60*60*1000;
 function archiveStamp(r){return r.completedAt?new Date(r.completedAt).toLocaleDateString():"Recently"}
 function cleanupArchived(){if(!user)return Promise.resolve();let cutoff=Date.now()-archiveExpiryMs;return Promise.all(reminders.filter(r=>r.done&&r.completedAt&&Date.parse(r.completedAt)<cutoff).map(r=>deleteReminder(r.id))).then(()=>{reminders=reminders.filter(r=>!(r.done&&r.completedAt&&Date.parse(r.completedAt)<cutoff))})}
-const originalRender=render;
-filtered=(...args)=>{let result=reminders.filter(r=>{let text=(r.title+" "+(r.note||"")+" "+(r.location||"")+" "+(r.category||"")+" "+(r.labels||[]).join(" ")).toLowerCase(),match=!query||text.includes(query.toLowerCase().trim()),d=displayStart(r)===null?"":key(displayStart(r)),today=key(new Date()),lab=!labelFilter||((r.labels||[]).includes(labelFilter)||r.category===labelFilter),prio=!priorityFilter||(r.priority||"medium")===priorityFilter;let visible=view==="inbox"?!r.done:view==="today"?!r.done&&d===today:view==="upcoming"?!r.done&&d>today:view==="filters"?!r.done&&lab&&prio:view==="archived"?r.done:true;return match&&visible});return result.sort((x,y)=>(displayStart(x)??Infinity)-(displayStart(y)??Infinity))};
-render=()=>{if(view!=="archived"){originalRender();return}$('pageTitle').textContent='Archived';$('pageSubtitle').textContent='Completed tasks are kept here for 30 days. Uncheck one to reopen it.';$('reporting').classList.add('hidden');$('taskSection').classList.remove('hidden');$('listHeading').textContent='Archived tasks';let data=filtered();$('empty').style.display=data.length?'none':'block';$('list').innerHTML=data.map(r=>'<article class="task"><input class="task-check" type="checkbox" data-done="'+esc(r.id)+'" checked aria-label="Reopen '+esc(r.title)+'"><div class="task-body"><div class="task-title done">'+esc(r.title)+'</div>'+(r.note?'<div class="task-note">'+esc(r.note)+'</div>':'')+'<div class="task-meta"><span class="chip due">Completed '+esc(archiveStamp(r))+'</span><span class="chip priority-'+(r.priority||'medium')+'">'+esc(priorityName(r.priority||'medium'))+'</span></div></div><div class="task-actions"><button data-edit="'+esc(r.id)+'">Edit</button><button class="danger" data-delete="'+esc(r.id)+'">Delete</button></div></article>').join('');document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===view))};
-const archiveNav=document.createElement('button');archiveNav.type='button';archiveNav.dataset.view='archived';archiveNav.innerHTML='<span class="nav-icon">✓</span>Archived';document.querySelector('.nav').appendChild(archiveNav);archiveNav.onclick=()=>{view='archived';labelFilter='';priorityFilter='';render()};
+const archiveNav=document.createElement('button');archiveNav.type='button';archiveNav.dataset.view='archived';archiveNav.innerHTML='<span class="nav-icon">✓</span>Archived';document.querySelector('.nav').appendChild(archiveNav);archiveNav.onclick=()=>changeView('archived');
 setInterval(()=>cleanupArchived().then(()=>{if(view==='archived')render()}),3600000);
 
 TaskOptions.init();
+
+function focusTaskField(id){
+  if($("quickAdd").classList.contains("hidden"))openTaskForm();
+  const field=id==="location"&&$("locationType").value==="online"?$("locationType"):$(id);
+  field.focus();field.scrollIntoView({behavior:"smooth",block:"center"});
+}
+function searchActions(){
+  const actions=[{title:"Add task",keywords:"new create reminder task",detail:"Open the task form",run:add}];
+  for(const [id,title,keywords] of [
+    ["inbox","Inbox","all active tasks reminders"],["today","Today","due today tasks reminders"],
+    ["upcoming","Upcoming","future scheduled tasks reminders"],["archived","Archived tasks","completed done history"],
+    ["filters","Filters & Labels","filter categories labels priorities"],["reporting","Reporting","reports statistics progress completed"]
+  ])actions.push({title,keywords,detail:"Open this view",run:()=>{changeView(id);$("pageTitle").focus();$("pageTitle").scrollIntoView({behavior:"smooth",block:"start"})}});
+  actions.push({title:"Notification settings",keywords:"notifications alerts reminders enable disable settings",detail:"Review page reminder settings",run:()=>{$("notificationBtn").focus();$("notificationControl").scrollIntoView({behavior:"smooth",block:"center"})}});
+  for(const [id,title,keywords] of [
+    ["timeZone","Time zone","timezone time zone region clock"],
+    ["date","Task dates and times","schedule start end date time"],
+    ["allDay","All-day task","all day event time schedule"],
+    ["repeat","Repeat a task","recurring recurrence repeat daily weekly monthly annually custom dates range"],
+    ["location","Location or online","where address venue place location online"],
+    ["conferenceType","Google Meet or Zoom link","video conference conferencing google meet zoom meeting link"],
+    ["guests","Invite guests by email","invite invitation share others guests email"],
+    ["note","Task description","description notes details instructions"],
+    ["driveUrl","Google Drive attachment","google drive docs attachment document file link"],
+    ["category","Task category","category categories home work personal family religion health finances errands shopping travel learning fitness social admin planning someday maybe custom"],
+    ["labels","Task labels","labels tags organize"],["priority","Task priority","priority high medium low"],
+    ["addNotification","Task notification timings","notifications alerts multiple custom 5 10 15 30 minutes hour day before"]
+  ])actions.push({title,keywords,detail:"Go to this option in the task form",run:()=>focusTaskField(id)});
+  for(const mode of ["dark","light"])actions.push({title:mode==="dark"?"Use dark theme":"Use light theme",keywords:mode+" theme appearance mode settings "+(mode==="dark"?"night black":"day bright"),detail:"Change this browser’s appearance",run:()=>{globalThis.AppTheme?.set(mode);$("themeToggle").focus()}});
+  actions.push({title:"Google Calendar draft",keywords:"google calendar export event",detail:"Choose a task to add to Google Calendar",run:()=>{changeView("inbox");status("Choose Google Calendar draft beside the task you want to add.");$("pageTitle").focus();$("pageTitle").scrollIntoView({behavior:"smooth",block:"start"})}});
+  return actions;
+}
+searchUi=TaskSearch.init({getTasks:()=>reminders,getActions:searchActions,isSignedIn:()=>Boolean(user),
+  openTask:id=>{const task=reminders.find(r=>r.id===id);if(task)openTaskForm(task)},
+  onQuery:value=>{query=value;render()}});

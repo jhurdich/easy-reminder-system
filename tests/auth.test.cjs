@@ -14,7 +14,7 @@ const html = readFileSync(path.join(root, 'reminder-system.html'), 'utf8');
 async function startApp({ deferCancellation = false, reminderDocs = [], allowReminderWrites = false,
   nowMs = Date.now(), storage = new Map(), storageBlocked = false, nativeSupported = true,
   notificationPermission = 'granted', permissionRequest, notificationThrows = false,
-  supportedTimeZones = Intl.supportedValuesOf?.bind(Intl) } = {}) {
+  supportedTimeZones = Intl.supportedValuesOf?.bind(Intl), systemDark = false } = {}) {
   const events = new Map();
   const documentEvents = new Map();
   const timers = new Map();
@@ -24,7 +24,11 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
   const elements = new Map([...html.matchAll(/id="([^"]+)"/g)].map(([, id]) => {
     const classes = new Set();
     return [id, {
-      disabled: false, checked: false, dataset: {}, innerHTML: '', textContent: '', value: '', style: {},
+      id, disabled: false, checked: false, dataset: {}, innerHTML: '', textContent: '', value: '', style: {}, attributes: new Map(),
+      setAttribute(name, value) { this.attributes.set(name, String(value)); },
+      getAttribute(name) { return this.attributes.get(name) ?? null; },
+      removeAttribute(name) { this.attributes.delete(name); },
+      querySelectorAll(selector) { return id === 'searchResults' && selector === '[role="option"]' ? searchOptions() : []; },
       classList: {
         add: value => classes.add(value), remove: value => classes.delete(value),
         contains: value => classes.has(value),
@@ -36,9 +40,21 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
       children: [],
       addEventListener() {},
       appendChild(child) { this.children.push(child); child.parent = this; },
-      focus() {}, scrollIntoView() {}, reset() {}
+      focus() { context.document.activeElement = this; }, scrollIntoView() {}, reset() {}
     }];
   }));
+  let optionsMarkup = null, cachedOptions = [];
+  function searchOptions() {
+    const markup = elements.get('searchResults').innerHTML;
+    if (markup !== optionsMarkup) {
+      optionsMarkup = markup;
+      cachedOptions = [...markup.matchAll(/id="(search-option-\d+)"[^>]*data-search-index="(\d+)"/g)].map(([, id, index]) => ({
+        id, dataset: { searchIndex: index }, attributes: new Map(),
+        setAttribute(name, value) { this.attributes.set(name, value); }, scrollIntoView() {}
+      }));
+    }
+    return cachedOptions;
+  }
   let notificationMarkup = '';
   // A native select cannot hold a value without a matching option.
   let selectedTimeZone = '';
@@ -143,8 +159,8 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
       setItem(key, value) { if (storageBlocked) throw new Error('Storage blocked'); storage.set(key, value); }
     },
     document: {
-      visibilityState: 'visible',
-      getElementById: id => elements.get(id), querySelectorAll: () => [],
+      visibilityState: 'visible', readyState: 'complete', documentElement: { dataset: {} },
+      getElementById: id => elements.get(id) || searchOptions().find(option => option.id === id), querySelectorAll: () => [],
       querySelector: () => ({ appendChild() {} }),
       createElement() {
         const nodes = new Map();
@@ -172,6 +188,7 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     },
     window: {
       ...(nativeSupported ? { Notification: TestNotification } : {}),
+      matchMedia: () => ({ matches: systemDark, addEventListener() {} }),
       addEventListener(type, callback, options = {}) {
         const listeners = events.get(type) || [];
         listeners.push({ callback, once: options.once }); events.set(type, listeners);
@@ -190,6 +207,7 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: callback => callback()
   });
+  vm.runInContext(readFileSync(path.join(root, 'theme.js'), 'utf8'), context);
   // A browser module rejects duplicate declarations; new Function(source) does not.
   const module = new vm.SourceTextModule(source, { context });
   await module.link(specifier => {
@@ -205,6 +223,11 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
   await authListener(null);
   return {
     elements, calls, storage, notification: TestNotification, taskOptions: context.TaskOptions,
+    theme: () => context.document.documentElement.dataset.theme,
+    focusedId: () => context.document.activeElement?.id,
+    search(value) { const input = elements.get('search'); input.focus(); input.value = value; input.oninput(); },
+    searchKey(key, isComposing = false) { elements.get('search').onkeydown({ key, isComposing, preventDefault() {} }); },
+    chooseSearch(index) { elements.get('searchResults').onclick({ target: { closest: () => ({ dataset: { searchIndex: String(index) } }) } }); },
     finishCancellations() { deferredCancellations.splice(0).forEach(cancel => cancel()); },
     click: id => elements.get(id).onclick(),
     async documentClick(dataset, extra = {}) {
@@ -781,6 +804,130 @@ test('an empty time-zone selection is rejected without silently scheduling in UT
   await app.submit();
   assert.equal(app.calls.writes.length, 0);
   assert.match(app.elements.get('formError').textContent, /Choose a time zone/);
+});
+test('search suggests matching tasks from their details and includes archived tasks', async () => {
+  const tasks = [
+    pageReminder({ id: 'cafe', title: 'Café planning', note: 'Review the budget', location: '47 Pine Avenue', category: 'Family', labels: ['weekend'], guests: ['alex@example.com'] }),
+    pageReminder({ id: 'archived', title: 'Finished invoice', done: true, completedAt: '2027-01-20T10:00:00Z' }),
+    pageReminder({ id: 'other', title: 'Unrelated appointment', location: 'Other place' })
+  ];
+  const app = await startApp({ reminderDocs: tasks }); await app.setUser('test-user');
+  for (const query of ['cafe', 'budg', 'pine plan', 'family', 'weekend', 'alex@exam']) {
+    app.search(query);
+    assert.equal(app.elements.get('search').getAttribute('aria-expanded'), 'true');
+    assert.match(app.elements.get('searchResults').innerHTML, /Café planning/);
+    assert.match(app.elements.get('list').innerHTML, /Café planning/);
+    assert.doesNotMatch(app.elements.get('list').innerHTML, /Unrelated appointment/);
+  }
+  app.search('finished');
+  assert.match(app.elements.get('searchResults').innerHTML, /Archived task/);
+  assert.match(app.elements.get('list').innerHTML, /Finished invoice/);
+  app.search('');
+  assert.equal(app.elements.get('search').getAttribute('aria-expanded'), 'false');
+  assert.equal(app.elements.get('pageTitle').textContent, 'Inbox');
+  assert.doesNotMatch(app.elements.get('list').innerHTML, /Finished invoice/);
+});
+test('search keyboard selection opens the chosen task without writing changes', async () => {
+  const app = await startApp({ reminderDocs: [pageReminder({ id: 'first', title: 'Agenda A' }), pageReminder({ id: 'second', title: 'Agenda B' })] });
+  await app.setUser('test-user'); app.search('agenda');
+  app.searchKey('ArrowDown');
+  assert.equal(app.elements.get('search').getAttribute('aria-activedescendant'), 'search-option-0');
+  app.searchKey('ArrowDown');
+  assert.equal(app.elements.get('search').getAttribute('aria-activedescendant'), 'search-option-1');
+  app.searchKey('Enter');
+  assert.equal(app.elements.get('title').value, 'Agenda B');
+  assert.equal(app.elements.get('formTitle').textContent, 'Edit task');
+  assert.equal(app.elements.get('search').value, '');
+  assert.equal(app.focusedId(), 'title');
+  assert.equal(app.calls.writes.length, 0);
+});
+test('search actions focus the existing form option without erasing unsaved edits', async () => {
+  const app = await formApp();
+  app.elements.get('note').value = 'Unsaved description';
+  app.search('time zone'); app.chooseSearch(0);
+  assert.equal(app.focusedId(), 'timeZone');
+  assert.equal(app.elements.get('note').value, 'Unsaved description');
+  assert.equal(app.elements.get('formTitle').textContent, 'Edit task');
+  app.search('notification settings'); app.chooseSearch(0);
+  assert.equal(app.focusedId(), 'notificationBtn');
+  assert.equal(app.calls.permissionRequests, 0);
+  assert.equal(app.calls.writes.length, 0);
+});
+test('search actions change views and themes and restore normal filtering', async () => {
+  const app = await startApp({ reminderDocs: [pageReminder({ title: 'Current task' }), pageReminder({ id: 'archived', title: 'Old task', done: true })] });
+  await app.setUser('test-user');
+  app.search('archived tasks'); app.chooseSearch(0);
+  assert.equal(app.elements.get('pageTitle').textContent, 'Archived');
+  assert.match(app.elements.get('list').innerHTML, /Old task/);
+  assert.doesNotMatch(app.elements.get('list').innerHTML, /Current task/);
+  app.search('current');
+  assert.equal(app.elements.get('pageTitle').textContent, 'Search results');
+  assert.match(app.elements.get('list').innerHTML, /Current task/);
+  app.search('reporting'); app.chooseSearch(0);
+  assert.equal(app.elements.get('reporting').classList.contains('hidden'), false);
+  app.search('current');
+  assert.equal(app.elements.get('taskSection').classList.contains('hidden'), false);
+  app.search('dark theme'); app.chooseSearch(0);
+  assert.equal(app.theme(), 'dark');
+  assert.equal(app.storage.get('easy-reminder:theme'), 'dark');
+  app.search('light theme'); app.chooseSearch(0);
+  assert.equal(app.theme(), 'light');
+});
+test('search handles dismissal, no matches, and composition without activating actions', async () => {
+  const app = await formApp();
+  app.search('theme'); app.searchKey('ArrowUp');
+  assert.equal(app.elements.get('search').getAttribute('aria-activedescendant'), 'search-option-1');
+  app.searchKey('Enter', true);
+  assert.equal(app.elements.get('search').getAttribute('aria-expanded'), 'true');
+  app.searchKey('Escape');
+  assert.equal(app.elements.get('search').getAttribute('aria-expanded'), 'false');
+  assert.equal(app.elements.get('search').getAttribute('aria-activedescendant'), null);
+  assert.equal(app.elements.get('search').value, 'theme');
+  app.search('no-match-xyz');
+  assert.equal(app.elements.get('searchNoResults').classList.contains('hidden'), false);
+  assert.equal(app.elements.get('searchStatus').textContent, '0 tasks and 0 actions found.');
+  app.searchKey('ArrowDown'); app.searchKey('Enter');
+  assert.equal(app.calls.writes.length, 0);
+  app.search('theme'); app.searchKey('Tab');
+  assert.equal(app.elements.get('search').getAttribute('aria-expanded'), 'false');
+});
+test('search escapes task content and removes private suggestions on account changes', async () => {
+  const app = await startApp({ reminderDocs: ref => ref[1] === 'owner' ? [pageReminder({ title: '<img src=x onerror=alert(1)> Secret', location: '<script>private</script>' })] : [] });
+  await app.setUser('owner'); app.search('secret');
+  const markup = app.elements.get('searchResults').innerHTML;
+  assert.match(markup, /&lt;img/); assert.match(markup, /&lt;script&gt;/);
+  assert.doesNotMatch(markup, /<img|<script/);
+  await app.setUser('other');
+  assert.equal(app.elements.get('searchResults').innerHTML, '');
+  assert.equal(app.elements.get('search').value, '');
+  app.search('secret'); assert.doesNotMatch(app.elements.get('searchResults').innerHTML, /Secret/);
+  app.search('theme'); await app.setUser(null); app.chooseSearch(0);
+  assert.equal(app.elements.get('search').getAttribute('aria-expanded'), 'false');
+  assert.equal(app.elements.get('searchResults').innerHTML, '');
+  assert.equal(app.theme(), 'light');
+});
+test('theme follows the device initially and an explicit choice survives reload and sign-in', async () => {
+  const storage = new Map(), app = await startApp({ storage, systemDark: true });
+  assert.equal(app.theme(), 'dark');
+  assert.equal(app.elements.get('loginThemeToggle').getAttribute('aria-pressed'), 'true');
+  app.click('loginThemeToggle');
+  assert.equal(app.theme(), 'light');
+  await app.setUser('test-user');
+  assert.equal(app.elements.get('themeToggle').getAttribute('aria-pressed'), 'false');
+  const reload = await startApp({ storage, systemDark: true });
+  assert.equal(reload.theme(), 'light');
+  reload.click('themeToggle');
+  assert.equal(reload.elements.get('loginThemeToggle').getAttribute('aria-pressed'), 'true');
+  assert.equal(reload.theme(), 'dark');
+});
+test('theme works without browser storage and responds to theme changes in another tab', async () => {
+  const blocked = await startApp({ storageBlocked: true });
+  blocked.click('loginThemeToggle'); assert.equal(blocked.theme(), 'dark');
+  const app = await startApp();
+  app.dispatch('storage', { key: 'easy-reminder:theme', newValue: 'dark' });
+  assert.equal(app.theme(), 'dark');
+  app.dispatch('storage', { key: 'easy-reminder:theme', newValue: 'invalid' });
+  assert.equal(app.theme(), 'light');
 });
 test('expanded form saves all requested metadata and reloads it for editing', async () => {
   const app = await formApp(), el = id => app.elements.get(id);
