@@ -28,7 +28,7 @@
     <button id="clearPageAlerts" type="button" class="signout">Dismiss reminders</button>
   </section>
 </div>
-<section class="page-head"><div><h1 id="pageTitle" tabindex="-1">Inbox</h1><p id="pageSubtitle">Your active reminders in one place.</p></div><button id="headAdd" class="primary save">Add task</button></section><section id="quickAdd" class="quick-add panel content hidden"><h2 id="formTitle">Add a task</h2><form id="form">
+<section class="page-head"><div><h1 id="pageTitle" tabindex="-1">Inbox</h1><p id="pageSubtitle">Your active reminders in one place.</p></div><button id="headAdd" class="primary save">Add task</button></section><section id="quickAdd" class="quick-add panel content hidden"><h2 id="formTitle">Add a task</h2><form id="form" novalidate>
   <div class="form-grid">
     <div class="field full"><label for="title">Task</label><input id="title" maxlength="200" autocomplete="off" placeholder="What do you need to do?"></div>
     <div class="field full"><label class="check-label" for="allDay"><input id="allDay" type="checkbox"> All day</label></div>
@@ -63,7 +63,7 @@
     <div class="field full notification-preview"><strong>Notification summary preview</strong><div id="notificationPreview" aria-live="polite"></div></div>
   </div>
   <div id="formError" class="auth-error" role="alert"></div>
-  <div class="quick-actions"><button id="saveTaskBtn" class="primary save">Save task</button><button type="button" id="cancelAdd" class="cancel">Cancel</button></div>
+  <div class="quick-actions"><button id="saveTaskBtn" type="submit" class="primary save">Save task</button><button type="button" id="cancelAdd" class="cancel">Cancel</button></div>
   <div class="notice">Tasks are private to your signed-in account. Free-plan reminders work only while this page is open, signed in, and running. Closing it, signing out, or putting your device to sleep interrupts reminders. Browser notification permission is separate from saving a task.</div>
 </form></section><section id="reporting" class="hidden"><div class="section-heading"><h2>Reporting</h2></div><div class="report-grid"><div class="stat"><strong id="totalStat">0</strong><span>Total tasks</span></div><div class="stat"><strong id="doneStat">0</strong><span>Completed</span></div><div class="stat"><strong id="activeStat">0</strong><span>Active</span></div></div><div class="panel content"><strong>Completion progress</strong><div class="progress"><i id="progressBar" style="width:0%"></i></div><div id="progressText" class="status">0% complete</div></div></section><section id="calendarView" class="calendar-view hidden" aria-label="Task calendar">
   <section class="calendar-overdue panel" aria-labelledby="calendarOverdueTitle">
@@ -86,6 +86,6 @@
   </section>
   <p id="calendarError" class="auth-error" role="status"></p>
 </section>
-<section id="taskSection"><div class="section-heading"><h2 id="listHeading">Tasks</h2><div id="status" class="status"></div></div><div id="list" class="task-list"></div><div id="empty" class="empty">No tasks here.</div></section></main></div></section><section id="idleWarning" class="idle-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="idleWarningTitle" aria-describedby="idleWarningText"><div class="idle-dialog panel"><h2 id="idleWarningTitle">Would you like to stay signed in?</h2><p id="idleWarningText">You have been inactive for one minute. You will be signed out in 30 seconds to protect your reminders.</p><div class="idle-actions"><button type="button" id="idleSignOutBtn" class="cancel">Sign out</button><button type="button" id="idleStayBtn" class="primary save">Stay signed in</button></div></div></section><script type="module" src="reminder-system.js?v=2026-09-17-calendar"></script>
+<section id="taskSection"><div class="section-heading"><h2 id="listHeading">Tasks</h2><div id="status" class="status"></div></div><div id="list" class="task-list"></div><div id="empty" class="empty">No tasks here.</div></section></main></div></section><section id="idleWarning" class="idle-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="idleWarningTitle" aria-describedby="idleWarningText"><div class="idle-dialog panel"><h2 id="idleWarningTitle">Would you like to stay signed in?</h2><p id="idleWarningText">You have been inactive for one minute. You will be signed out in 30 seconds to protect your reminders.</p><div class="idle-actions"><button type="button" id="idleSignOutBtn" class="cancel">Sign out</button><button type="button" id="idleStayBtn" class="primary save">Stay signed in</button></div></div></section><script type="module" src="reminder-system.js?v=2026-09-17-save-address"></script>
 </body>
 </html>
