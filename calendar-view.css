@@ -1,0 +1,36 @@
+.calendar-view { display: grid; gap: 22px; }
+.calendar-overdue { border-left: 4px solid var(--calendar-overdue); padding: 18px; }
+:root { --calendar-overdue: #ac3226; --calendar-today: #fff2ef; }
+:root[data-theme="dark"] { --calendar-overdue: #ffa69d; --calendar-today: #392720; }
+.calendar-overdue h2 { margin: 0 0 6px; font-size: 19px; color: var(--calendar-overdue); }
+.calendar-overdue h2 span { font-size: 14px; margin-left: 6px; }
+.calendar-help, .calendar-empty { color: var(--muted); font-size: 12px; margin: 8px 0; }
+.calendar-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.calendar-toolbar h2 { margin: 0; font-size: 21px; }
+.calendar-navigation { display: flex; gap: 6px; }
+.calendar-navigation button { padding: 8px 12px; }
+.calendar-weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.calendar-weekdays { color: var(--muted); font-size: 12px; text-align: center; margin-top: 16px; padding: 8px 0; }
+.calendar-grid { border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.calendar-day { min-height: 108px; min-width: 0; padding: 8px; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.calendar-day:hover { background: var(--hover); }
+.calendar-day.outside-month { background: var(--soft); }
+.calendar-day.outside-month .calendar-day-number { color: var(--muted); }
+.calendar-day.is-today .calendar-day-number { color: var(--accent-dark); font-weight: 800; text-decoration: underline; text-underline-offset: 4px; }
+.calendar-day[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--accent); background: var(--calendar-today); }
+.calendar-day:focus-visible { outline-offset: -3px; }
+.calendar-day-number { font-weight: 600; }
+.calendar-day-count { font-size: 10px; color: var(--muted); }
+.calendar-day-preview { display: grid; gap: 3px; width: 100%; font-size: 10px; }
+.calendar-day-preview span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.calendar-day-preview .is-overdue, .calendar-state.is-overdue { color: var(--calendar-overdue); }
+.calendar-agenda h3 { margin: 0 0 10px; font-size: 17px; }
+.calendar-tasks { list-style: none; padding: 0; margin: 0; }
+.calendar-overdue .calendar-tasks { max-height: 300px; overflow-y: auto; }
+.calendar-task { display: flex; gap: 12px; align-items: flex-start; border-top: 1px solid var(--line); padding: 12px 0; }
+.calendar-task-open { min-width: 0; flex: 1; display: grid; gap: 4px; padding: 4px; border: 0; border-radius: 5px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.calendar-task-open:hover { background: var(--hover); }
+.calendar-task-open strong { font-size: 14px; }
+.calendar-task-open span { font-size: 12px; color: var(--muted); }
+.calendar-state { flex-shrink: 0; font-size: 11px; padding: 5px 7px; border-radius: 12px; background: var(--soft); color: var(--muted); }
+@media (max-width: 560px) { .calendar-day { min-height: 66px; padding: 6px 3px; } .calendar-day-preview { display: none; } .calendar-day-count { font-size: 9px; } .calendar-task { flex-wrap: wrap; gap: 4px; } .calendar-task-open { flex-basis: 100%; } .calendar-overdue { padding: 12px; } }

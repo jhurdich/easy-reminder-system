@@ -1,6 +1,7 @@
 import "./functions-correct/task-core.js";
 import "./task-options.js?v=2026-09-17-time-zones";
 import "./search-ui.js?v=2026-09-17-search-theme";
+import "./calendar-view.js?v=2026-09-17-calendar";
 const TaskCore=globalThis.TaskCore,TaskOptions=globalThis.TaskOptions;
 import{initializeApp}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import{initializeAppCheck,ReCaptchaEnterpriseProvider}from"https://www.gstatic.com/firebasejs/12.18.0/firebase-app-check.js";
@@ -17,6 +18,7 @@ let notificationAttempt=0,notificationPending=false,nativeNotificationsFailed=fa
 let recentAlerts=[];
 let authGeneration=0;
 let searchUi=null;
+let calendarUi=null;
 const openNotifications=new Set();
 const IDLE_LIMIT=60000,IDLE_GRACE=30000,now=new Date(),units={once:"one time",minutes:"minute(s)",hours:"hour(s)",days:"day(s)",weeks:"week(s)"};
 $("date").value=now.toISOString().slice(0,10);
@@ -179,6 +181,7 @@ return reminders.filter(r=>{
 }).sort((x,y)=>(displayStart(x)??Infinity)-(displayStart(y)??Infinity))}
 function render(){
   let titles={inbox:["Inbox","Your active reminders in one place."],today:["Today","Tasks due today."],upcoming:["Upcoming","See what is coming next."],filters:["Filters & Labels","Filter active tasks by label."],reporting:["Reporting","A simple view of your progress."],archived:["Archived","Completed tasks are kept here for 30 days. Uncheck one to reopen it."]};
+  titles.calendar=["Calendar","Current and upcoming tasks, with overdue tasks at the top."];
   const searching=Boolean(query.trim());
 
   $("pageTitle").textContent=searching?"Search results":titles[view][0];
@@ -187,7 +190,9 @@ function render(){
 
   $("reporting").classList.toggle("hidden",searching||view!=="reporting");
 
-  $("taskSection").classList.toggle("hidden",!searching&&view==="reporting");
+  $("taskSection").classList.toggle("hidden",!searching&&["reporting","calendar"].includes(view));
+  $("calendarView").classList.toggle("hidden",searching||view!=="calendar");
+  if(!searching&&view==="calendar")calendarUi?.render();
 
   $("listHeading").textContent=searching?"Matching tasks":view==="archived"?"Archived tasks":priorityFilter?priorityName(priorityFilter):labelFilter?"# "+labelFilter:"Tasks";
   document.querySelectorAll('[data-view]').forEach(button=>button.classList.toggle('active',!searching&&button.dataset.view===view));
@@ -357,6 +362,7 @@ $("quickAdd").classList.add("hidden")};
 function clearSearch(){query="";searchUi?.reset()}
 function changeView(next){clearSearch();view=next;labelFilter="";priorityFilter="";render()}
 document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>changeView(b.dataset.view));
+$("calendarNav").onclick=()=>changeView("calendar");
 $("labelList").onclick=e=>{let b=e.target.closest("[data-label]");
 if(b){clearSearch();view="filters";
 labelFilter=b.dataset.label;
@@ -433,7 +439,7 @@ onAuthStateChanged(auth,async u=>{user=u;
 const generation=++authGeneration;
 if(idleTimer)clearTimeout(idleTimer);idleTimer=null;hideIdleWarning();
 notificationAttempt++;notificationPending=false;notificationsEnabled=false;nativeNotificationsFailed=false;
-notifiedOccurrences.clear();reminders=[];clearPageAlerts();clearSearch();
+notifiedOccurrences.clear();reminders=[];clearPageAlerts();clearSearch();calendarUi?.reset();
 $("list").innerHTML="";
 $("keepReminderSession").checked=false;
 if(u){$("loginGate").classList.add("hidden");
@@ -470,7 +476,7 @@ function searchActions(){
   const actions=[{title:"Add task",keywords:"new create reminder task",detail:"Open the task form",run:add}];
   for(const [id,title,keywords] of [
     ["inbox","Inbox","all active tasks reminders"],["today","Today","due today tasks reminders"],
-    ["upcoming","Upcoming","future scheduled tasks reminders"],["archived","Archived tasks","completed done history"],
+    ["upcoming","Upcoming","future scheduled tasks reminders"],["calendar","Calendar","calendar month dates current upcoming overdue tasks"],["archived","Archived tasks","completed done history"],
     ["filters","Filters & Labels","filter categories labels priorities"],["reporting","Reporting","reports statistics progress completed"]
   ])actions.push({title,keywords,detail:"Open this view",run:()=>{changeView(id);$("pageTitle").focus();$("pageTitle").scrollIntoView({behavior:"smooth",block:"start"})}});
   actions.push({title:"Notification settings",keywords:"notifications alerts reminders enable disable settings",detail:"Review page reminder settings",run:()=>{$("notificationBtn").focus();$("notificationControl").scrollIntoView({behavior:"smooth",block:"center"})}});
@@ -495,3 +501,8 @@ function searchActions(){
 searchUi=TaskSearch.init({getTasks:()=>reminders,getActions:searchActions,isSignedIn:()=>Boolean(user),
   openTask:id=>{const task=reminders.find(r=>r.id===id);if(task)openTaskForm(task)},
   onQuery:value=>{query=value;render()}});
+calendarUi=TaskCalendar.init({getTasks:()=>reminders,onOpen:id=>{const task=reminders.find(r=>r.id===id);if(task)openTaskForm(task)}});
+function refreshCalendar(){if(user&&view==="calendar"&&!query.trim())calendarUi.render()}
+setInterval(refreshCalendar,60000);
+window.addEventListener("focus",refreshCalendar);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")refreshCalendar()});

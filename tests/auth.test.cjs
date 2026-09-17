@@ -228,6 +228,8 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
     search(value) { const input = elements.get('search'); input.focus(); input.value = value; input.oninput(); },
     searchKey(key, isComposing = false) { elements.get('search').onkeydown({ key, isComposing, preventDefault() {} }); },
     chooseSearch(index) { elements.get('searchResults').onclick({ target: { closest: () => ({ dataset: { searchIndex: String(index) } }) } }); },
+    calendarDay(date) { elements.get('calendarView').onclick({ target: { closest: selector => selector === '[data-calendar-day]' ? { dataset: { calendarDay: date } } : null } }); },
+    calendarTask(id) { elements.get('calendarView').onclick({ target: { closest: selector => selector === '[data-calendar-task]' ? { dataset: { calendarTask: id } } : null } }); },
     finishCancellations() { deferredCancellations.splice(0).forEach(cancel => cancel()); },
     click: id => elements.get(id).onclick(),
     async documentClick(dataset, extra = {}) {
@@ -243,6 +245,7 @@ async function startApp({ deferCancellation = false, reminderDocs = [], allowRem
       for (const callback of documentEvents.get('visibilitychange') || []) await callback();
     },
     tickNotifications() { for (const timer of intervals.values()) if (timer.delay === 15000) timer.callback(); },
+    tickCalendar() { for (const timer of intervals.values()) if (timer.delay === 60000) timer.callback(); },
     async setUser(uid) {
       auth.currentUser = uid ? { uid, email: uid + '@example.invalid' } : null;
       await authListener(auth.currentUser);
@@ -928,6 +931,79 @@ test('theme works without browser storage and responds to theme changes in anoth
   assert.equal(app.theme(), 'dark');
   app.dispatch('storage', { key: 'easy-reminder:theme', newValue: 'invalid' });
   assert.equal(app.theme(), 'light');
+});
+test('Calendar navigation shows overdue, current and upcoming tasks and opens the chosen task', async () => {
+  const app = await startApp({ nowMs: Date.parse('2027-01-20T09:30:00Z'), reminderDocs: [
+    pageReminder({ id: 'overdue', title: 'Late task', next: '2027-01-19T09:00:00Z', date: '2027-01-19', endDate: '2027-01-19' }),
+    pageReminder({ id: 'current', title: 'Current task' }),
+    pageReminder({ id: 'upcoming', title: 'Future task', next: '2027-01-21T09:00:00Z', date: '2027-01-21', endDate: '2027-01-21' }),
+    pageReminder({ id: 'done', title: 'Finished task', done: true })
+  ] });
+  await app.setUser('test-user'); app.click('calendarNav');
+  assert.equal(app.elements.get('pageTitle').textContent, 'Calendar');
+  assert.equal(app.elements.get('calendarView').classList.contains('hidden'), false);
+  assert.equal(app.elements.get('taskSection').classList.contains('hidden'), true);
+  assert.equal(app.elements.get('calendarOverdueCount').textContent, '1');
+  assert.match(app.elements.get('calendarOverdueList').innerHTML, /Late task/);
+  assert.doesNotMatch(app.elements.get('calendarOverdueList').innerHTML, /Current task|Future task|Finished task/);
+  assert.match(app.elements.get('calendarDayList').innerHTML, /Current task/);
+  assert.match(app.elements.get('calendarDayList').innerHTML, /In progress/);
+  app.calendarDay('2027-01-21');
+  assert.match(app.elements.get('calendarDayList').innerHTML, /Future task/);
+  assert.match(app.elements.get('calendarDayList').innerHTML, /Upcoming/);
+  app.calendarTask('upcoming');
+  assert.equal(app.elements.get('title').value, 'Future task');
+  assert.equal(app.elements.get('formTitle').textContent, 'Edit task');
+  assert.equal(app.calls.writes.length, 0);
+});
+test('calendar month controls, Today, and search preserve the selected calendar view', async () => {
+  const app = await startApp({ nowMs: Date.parse('2027-01-20T09:30:00Z') });
+  await app.setUser('test-user'); app.search('Calendar'); app.chooseSearch(0);
+  assert.equal(app.elements.get('pageTitle').textContent, 'Calendar');
+  assert.equal(app.elements.get('calendarMonth').textContent, 'January 2027');
+  app.click('calendarPrevious'); assert.equal(app.elements.get('calendarMonth').textContent, 'December 2026');
+  app.click('calendarNext'); app.click('calendarNext'); assert.equal(app.elements.get('calendarMonth').textContent, 'February 2027');
+  app.click('calendarToday'); assert.equal(app.elements.get('calendarMonth').textContent, 'January 2027');
+  assert.match(app.elements.get('calendarDayTitle').textContent, /January 20, 2027/);
+  app.search('anything'); assert.equal(app.elements.get('calendarView').classList.contains('hidden'), true);
+  app.search(''); assert.equal(app.elements.get('calendarView').classList.contains('hidden'), false);
+  assert.equal(app.elements.get('calendarDayEmpty').classList.contains('hidden'), false);
+});
+test('completing or rescheduling a task immediately updates the calendar and overdue section', async () => {
+  const app = await startApp({ nowMs: Date.parse('2027-01-20T12:00:00Z'), reminderDocs: [pageReminder()], allowReminderWrites: true });
+  await app.setUser('test-user'); app.click('calendarNav');
+  assert.equal(app.elements.get('calendarOverdueCount').textContent, '1');
+  app.calendarTask('page-task');
+  app.elements.get('date').value = '2027-01-22'; app.elements.get('endDate').value = '2027-01-22';
+  await app.submit();
+  assert.equal(app.elements.get('calendarOverdueCount').textContent, '0');
+  app.calendarDay('2027-01-22'); assert.match(app.elements.get('calendarDayList').innerHTML, /Review &lt;agenda&gt;/);
+  await app.documentClick({ done: 'page-task' }, { checked: true });
+  assert.equal(app.elements.get('calendarDayList').innerHTML, '');
+  assert.equal(app.elements.get('calendarOverdueEmpty').classList.contains('hidden'), false);
+});
+test('the open calendar updates overdue status as time passes without database polling', async () => {
+  const app = await startApp({ nowMs: Date.parse('2027-01-20T09:59:30Z'), reminderDocs: [pageReminder()] });
+  await app.setUser('test-user'); app.click('calendarNav');
+  const reads = app.calls.reads.length;
+  assert.equal(app.elements.get('calendarOverdueCount').textContent, '0');
+  await app.advance(30000); app.tickCalendar();
+  assert.equal(app.elements.get('calendarOverdueCount').textContent, '1');
+  assert.equal(app.calls.reads.length, reads);
+  assert.equal(app.calls.writes.length, 0);
+});
+test('calendar task text is escaped and private calendar data clears on account changes', async () => {
+  const app = await startApp({ nowMs: Date.parse('2027-01-20T12:00Z'), reminderDocs: ref => ref[1] === 'owner' ? [pageReminder({ title: '<img src=x onerror=alert(1)> private', location: '<script>secret</script>' })] : [] });
+  await app.setUser('owner'); app.click('calendarNav');
+  const markup = app.elements.get('calendarOverdueList').innerHTML;
+  assert.match(markup, /&lt;img/); assert.match(markup, /&lt;script&gt;/);
+  assert.doesNotMatch(markup, /<img|<script/);
+  await app.setUser('other');
+  assert.equal(app.elements.get('calendarOverdueList').innerHTML, '');
+  assert.equal(app.elements.get('calendarDayList').innerHTML, '');
+  assert.doesNotMatch(app.elements.get('calendarGrid').innerHTML, /private/);
+  await app.setUser(null);
+  assert.equal(app.elements.get('calendarGrid').innerHTML, '');
 });
 test('expanded form saves all requested metadata and reloads it for editing', async () => {
   const app = await formApp(), el = id => app.elements.get(id);
